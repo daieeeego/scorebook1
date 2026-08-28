@@ -1,122 +1,72 @@
-# テスト方針（Claude 実装 / Codex 検証）
+# Codex 連携の手順
 
 作成日: 2026-08-28
 
-## 1. 役割分担
+**方針（役割分担・テスト対象・CIゲート）は要件定義（`要件定義/` の最新版）§10.2 が正。**
+このドキュメントはそれを実行するための操作手順のみを扱う。方針を変えるときは §10.2 を直すこと。
 
-| 担当 | 範囲 |
-|---|---|
-| Claude | 要件定義、実装（`src/`）、テストが落ちた箇所の修正 |
-| Codex | `test/` の作成。**仕様書のみを根拠とし、実装は見ない** |
-| Stryker | テストの assert が緩くないかを機械的に測る |
+プロンプトの本文は `prompts/` に置いてある。ここには載せない（二重管理を避けるため）。
 
-**なぜ実装を見せないか**：実装者がテストを書くと、仕様ではなく実装の分岐をなぞるテストになる。
-Claude が仕様を誤解していた場合、その誤解ごと追認されて検証にならない。
-
-## 2. テスト対象
-
-`src/rules.js` のみ。純粋関数だけで構成され、React も DOM も介在しないため
-`environment: "node"` で完結する。品質リスクはほぼこの1ファイルに集中している。
-
-`src/App.jsx` は対象外（Phase 1 では手動確認とする）。
-
-## 3. 実行
-
-```bash
-npm test          # 1回実行
-npm run test:watch
-npm run mutate    # ミューテーションテスト（rules.js のみ）
-```
-
-CI は `.github/workflows/ci.yml`（PR）と `deploy.yml`（main への push）の
-両方で `npm test` を通す。**テストが落ちると GitHub Pages へ公開されない。**
-
-## 4. Codex への依頼（第1パス：仕様からテストを書く）
-
-`codex` CLI 未導入の場合：
+## 1. Codex CLI の準備
 
 ```bash
 npm i -g @openai/codex
 codex login
 ```
 
-リポジトリ直下で以下を実行する。
+**モデルの指定に注意。** `~/.codex/config.toml` の `model` が ChatGPT アカウントで
+使えない値だと、認証は通っているのに実行時に弾かれる。
 
 ```
-codex exec "test/rules.spec.js を作れ。
-
-【根拠にしてよい資料】
-  要件定義/要件定義_少年野球スコアブックアプリ_v0.3.md の 5章・6章・7章
-  test/helpers.js（フィクスチャ生成のみ。判定は入っていない）
-
-【禁止】
-  src/rules.js と src/App.jsx を開くこと。
-  実装を読むと仕様ではなく実装をなぞるテストになり、検証にならない。
-
-【対象APIの契約】
-  initialState(setup) -> state
-  applyEvent(state, event) -> newState      // 純粋関数。state は変更しない
-  deriveState(events, setup) -> state        // resolve を反映してから畳み込む
-  stateBefore(events, setup, index) -> state // index 直前の盤面
-  questionFor(state, zone, result) -> {text, options} | null
-  validateSub(state, sub) -> string | null   // null なら妥当
-  inferSubKind(state, side, order) -> {kind, base?}
-  statsFrom(state) / deriveStats(events, setup) -> {pitchers, players}
-  pendingPlays(state) -> 未確定の保留プレー
-  migrate(saved) -> {setup, events, migrated} | null
-  toSlots(side, nums, positions) / pid(side, num) / uniformOf(playerId)
-
-  state = {
-    inning, isTop, outs, bases:[一塁,二塁,三塁], balls, strikes,
-    order:{away,home}, score:{away,home},
-    lineup:{away:[slot], home:[slot]},
-    pitchCount:{playerId:数}, halves:{playerId:['1表',...]},
-    plateAppearances:{playerId:数}, log:[{seq,src,inning,isTop,text,pending}],
-    seq, setup
-  }
-  slot  = { order, entries:[entry] }
-  entry = { playerId, position, entryType, enteredAtSeq, exitedAtSeq }
-  bases の各要素は playerId（'home#7' 形式）または null
-
-  event =
-    {t:'pitch',  r:'ボール'|'ストライク'|'ファウル'}
-  | {t:'inplay', zone:1..9, result, answer?, note?}
-  | {t:'runner', from:0|1|2, reason, out:boolean}
-  | {t:'sub',    side, order, num, position?, kind, base?, moves?}
-  | {t:'resolve',target:イベント位置, result, answer?}
-
-【網羅すべき範囲】
-  §7.1 第1層（制約）  : validateSub の全エラー条件、questionFor が返す options の中身
-  §7.1 第2層（導出）  : 押し出し、打者走者の一塁到達、三塁走者の生還、
-                        三振・四球のアウトと打者交代、3アウトでのイニング交代
-  §7.1 第3層（質問）  : 表の3行それぞれ
-  §5.1〜5.4          : FR-01〜FR-21 のうち『済』のもの
-  §6.1               : 過去イベントを書き換えないこと（resolve の追記で確定する）
-  不変性             : applyEvent が引数の state を変更しないこと
-
-【書き方】
-  vitest。describe に要件ID（FR-xx / §7.1-第N層）を含める。
-  1テスト1事実。複数の assert を1テストに詰めない。
-  期待値は仕様書の記述から導き、実装の出力を貼り付けない。"
+ERROR: The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.
 ```
 
-## 5. Codex への依頼（第2パス：仕様の穴を洗う）
+`-m` で明示的に上書きするのが確実（2026-08-28 時点で `gpt-5.6-sol` を確認済み）。
+候補は `~/.codex/models_cache.json` に載っている。
+
+ファイルを書かせるので `-s workspace-write` も必須。読み取りだけなら `-s read-only`。
+
+## 2. 第1パス：仕様からテストを書かせる
+
+```bash
+codex exec -s workspace-write -m gpt-5.6-sol "$(cat prompts/codex-pass1-テスト作成.txt)"
+```
+
+PowerShell では `codex exec -s workspace-write -m gpt-5.6-sol (Get-Content -Raw prompts/codex-pass1-テスト作成.txt)`。
+
+このプロンプトは `src/rules.js` と `src/App.jsx` を開くことを明示的に禁止している。
+代わりに対象APIの契約をプロンプト内に全部書いてあるので、実装を読まずにテストが書ける。
+
+**実装を変更したら、プロンプト内のAPI契約も更新すること。** ここが古いと Codex は
+存在しない関数のテストを書く。
+
+## 3. 監査：実装を読んでいないことの確認
+
+第1パスの成果物を受け入れる前に必ず行う。読んでいた場合、そのテストは実装の追認に
+なっている可能性があるので破棄してやり直す。
+
+実行ログから Codex が叩いたコマンドを一覧する。
+
+```bash
+grep -A1 "^exec$" <ログファイル> | grep -v "^exec$\|^--$" | sed 's/ in C:.*//'
+```
+
+`src/rules.js` や `src/App.jsx` を `Get-Content` / `cat` / `rg` している行がなければ合格。
+テスト失敗時のスタックトレースに `src/rules.js:233` のような行番号が出るのは問題ない
+（実装の中身は見えていない）。
+
+## 4. 第2パス：仕様の穴を洗う
 
 第1パスが完了した**後**なら実装を見せてよい。出力先は要件定義 §13 未決事項。
 
-```
-codex exec "src/rules.js を読み、要件定義 v0.3 §7.1 に記述のない挙動を列挙せよ。
-
-観点:
-  - 仕様に根拠のない自動導出（勝手に得点や進塁が発生する経路）
-  - 走者・アウトカウントの整合が崩れる入力列
-  - 設計原則 12.2（選択肢の配置を変えない）と §7.1 第1層（不正な盤面を作らせない）が
-    衝突している箇所
-
-修正はするな。OPEN-08 以降として §13 のテーブル形式で出力せよ。"
+```bash
+codex exec -s read-only -m gpt-5.6-sol "$(cat prompts/codex-pass2-仕様の穴.txt)"
 ```
 
-## 6. ミューテーションテスト
+第1パスで捕まらなかったバグは、たいてい**仕様書がその挙動について沈黙している**。
+バグの所在と仕様の穴は一致するので、第2パスの出力はそのまま要件定義の補強点になる。
+
+## 5. ミューテーションテスト
 
 テストの assert が緩いかどうかは、AI に判定させず機械的に測る。
 
@@ -124,11 +74,14 @@ codex exec "src/rules.js を読み、要件定義 v0.3 §7.1 に記述のない�
 npm run mutate
 ```
 
-`src/rules.js` のみを対象とするため実行は短時間で終わる。
-生存ミュータント（survived）の一覧が、そのままテストの穴の一覧になる。
-`reports/mutation/mutation.html` を開いて確認する。
+`reports/mutation/mutation.html` に結果が出る。生存ミュータント（survived）の一覧が、
+そのままテストの穴の一覧になる。
 
-## 7. Copilot について
+**全テストが通っていないと起動しない**（`ConfigError: There were failed tests in the
+initial test run`）。失敗を残したまま計測はできない。
 
-`Copilot code review` はコメントを出すのみでテストを書かないため、この用途では代替にならない。
-契約済みであれば PR の自動レビュアーとして併用してよいが、Codex の代わりにはならない。
+## 6. Copilot について
+
+`Copilot code review` はコメントを出すのみでテストを書かないため、この用途では
+代替にならない。契約済みであれば PR の自動レビュアーとして併用してよいが、
+Codex の代わりにはならない。
