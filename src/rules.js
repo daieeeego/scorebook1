@@ -70,16 +70,76 @@ export const RESULT_GROUPS = [
     label: "その他", tone: "warn",
     items: [
       { k: "野手選択", l: "フィルダースチョイス" },
+    ],
+  },
+];
+
+/* 「詳細」の先に置く選択肢。記法規約 §5／§6 のうち、
+   よく出る10種（RESULT_GROUPS）に入っていないもの。
+   頻度が低いものを1階層下げ、よく出るプレーのタップ数を増やさない */
+export const DETAIL_GROUPS = [
+  {
+    label: "出塁", tone: "ghost",
+    items: [
+      { k: "死球", l: "死球" },
+      { k: "敬遠四球", l: "敬遠四球" },
+      { k: "振り逃げ", l: "振り逃げ" },
+      { k: "バントヒット", l: "バントヒット" },
+      { k: "テキサスヒット", l: "テキサスヒット" },
+      { k: "ランニングホームラン", l: "ランニングホームラン" },
+      { k: "打撃妨害", l: "打撃妨害" },
+      { k: "走塁妨害", l: "走塁妨害" },
+    ],
+  },
+  {
+    label: "エラーの種類", tone: "ghost",
+    items: [
+      { k: "ゴロエラー", l: "ゴロエラー" },
+      { k: "フライエラー", l: "フライエラー（落球）" },
+      { k: "悪送球（高投）", l: "悪送球（高投）" },
+      { k: "悪送球（低投）", l: "悪送球（低投）" },
+    ],
+  },
+  {
+    label: "アウト", tone: "ghost",
+    items: [
+      { k: "犠牲フライ", l: "犠牲フライ" },
+      { k: "犠牲バント", l: "犠牲バント" },
+      { k: "ファールフライ", l: "ファールフライ" },
+      { k: "インフィールドフライ", l: "インフィールドフライ" },
+      { k: "3バント失敗", l: "3バント失敗" },
+      { k: "トリプルプレー", l: "トリプルプレー" },
+    ],
+  },
+  {
+    label: "その他", tone: "warn",
+    items: [
       { k: "保留", l: "あとで決める" },
     ],
   },
 ];
 
+export const DETAIL_KEYS = new Set(DETAIL_GROUPS.flatMap((g) => g.items.map((i) => i.k)));
+
+/* 盤面への効き方が同じものをまとめる。記号は違っても導出は共通 */
+const HR_LIKE = new Set(["本塁打", "ランニングホームラン"]);
+const HIT_LIKE = new Set(["安打", "バントヒット", "テキサスヒット"]);
+const ERROR_LIKE = new Set(["失策で出塁", "ゴロエラー", "フライエラー", "悪送球（高投）", "悪送球（低投）"]);
+/* 打者が一塁を与えられ、詰まっている走者だけが押し出される */
+const PUSH_LIKE = new Set(["死球", "敬遠四球", "打撃妨害", "走塁妨害", "振り逃げ"]);
+/* 打者だけがアウトになり、走者は動かない */
+const BATTER_OUT_ONLY = new Set(["ファールフライ", "インフィールドフライ", "3バント失敗"]);
+/* 打球ではないため、打球方向を記録しない */
+const NO_ZONE = new Set(["死球", "敬遠四球", "打撃妨害", "走塁妨害", "振り逃げ", "3バント失敗"]);
+
+export const isHitLike = (r) => HIT_LIKE.has(r);
+export const isErrorLike = (r) => ERROR_LIKE.has(r);
+export const needsZone = (r) => !NO_ZONE.has(r);
+
 /* 保留の確定で選べる結果。「保留」自体は選べない */
-export const RESOLVABLE = RESULT_GROUPS.map((g) => ({
-  ...g,
-  items: g.items.filter((i) => i.k !== "保留"),
-})).filter((g) => g.items.length);
+export const RESOLVABLE = [...RESULT_GROUPS, ...DETAIL_GROUPS]
+  .map((g) => ({ ...g, items: g.items.filter((i) => i.k !== "保留") }))
+  .filter((g) => g.items.length);
 
 /* ---------------- 選手の識別 ----------------
    氏名を登録しない運用（§12 / FR-14）のため、
@@ -407,14 +467,54 @@ export function applyEvent(prev, e) {
     const r = e.result;
     const mark = e._resolved ? "（確定）" : "";
 
-    if (r === "本塁打") {
-      advanceAll(s, 4);
-      s.score[batKey(s)] += 1;
-      push(s, `${t} 本塁打（${where}方向）${mark}`, { src });
+    /* --- 詳細（記法規約 §5／§6 の追加分） --- */
+
+    if (PUSH_LIKE.has(r)) {
+      forcePush(s, num);
+      push(s, `${t} ${r}${mark}`, { src });
       nextBatter(s);
       return s;
     }
-    if (r === "安打" || r === "失策で出塁") {
+    if (BATTER_OUT_ONLY.has(r)) {
+      s.outs += 1;
+      push(s, `${t} ${r}${NO_ZONE.has(r) ? "" : `（${where}）`}${mark}`, { src });
+      nextBatter(s);
+      if (s.outs >= 3) endHalf(s);
+      return s;
+    }
+    if (r === "犠牲フライ") {
+      s.outs += 1;
+      const third = s.bases[2];
+      if (third != null) { s.score[batKey(s)] += 1; s.bases[2] = null; }
+      push(s, `${t} 犠牲フライ（△${where}）${third != null ? " 三塁走者生還" : ""}${mark}`, { src });
+      nextBatter(s);
+      if (s.outs >= 3) endHalf(s);
+      return s;
+    }
+    if (r === "犠牲バント") {
+      s.outs += 1;
+      advanceAll(s, 1);
+      push(s, `${t} 犠牲バント（△${where}）${mark}`, { src });
+      nextBatter(s);
+      if (s.outs >= 3) endHalf(s);
+      return s;
+    }
+    if (r === "トリプルプレー") {
+      s.outs += 3;
+      push(s, `${t} トリプルプレー（${where}）${mark}`, { src });
+      nextBatter(s);
+      endHalf(s);
+      return s;
+    }
+
+    if (HR_LIKE.has(r)) {
+      advanceAll(s, 4);
+      s.score[batKey(s)] += 1;
+      push(s, `${t} ${r}（${where}方向）${mark}`, { src });
+      nextBatter(s);
+      return s;
+    }
+    if (HIT_LIKE.has(r) || ERROR_LIKE.has(r)) {
       const bk = batKey(s);
       const [r1, r2, r3] = s.bases;
       s.bases = [null, null, null];
@@ -514,7 +614,7 @@ export function questionFor(state, zone, result) {
       options: ["フォースアウト（二塁）", "ダブルプレー", "二塁へ進んだ", "一塁に留まった"],
     };
   }
-  if ((result === "安打" || result === "失策で出塁") && state.bases[1] != null) {
+  if ((HIT_LIKE.has(result) || ERROR_LIKE.has(result)) && state.bases[1] != null) {
     // 一塁にも走者がいる場合、二塁走者は押し出されるため「留まった」は選べない
     const forced = state.bases[0] != null;
     return {

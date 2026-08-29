@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS, RUNNER_REASONS, RESULT_GROUPS, RESOLVABLE,
+  POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS, RUNNER_REASONS,
+  RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, RESOLVABLE,
   deriveState, questionFor, stateBefore, statsFrom, migrate, toSlots,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
   pitcherId, uniformOf, validateSub, inferSubKind, pid,
@@ -650,6 +651,7 @@ export default function App() {
     switch (mode) {
       case "zone": return "「打った」を取り消す";
       case "result": return "打球方向の選択に戻る";
+      case "detail": return "結果の選択に戻る";
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
       case "runner-who": return "「走者が動いた」を取り消す";
@@ -662,6 +664,7 @@ export default function App() {
         if (last.t === "pitch") return "直前の投球を取り消す";
         if (last.t === "runner") return "走者が動いた理由の選択に戻る";
         if (last.result === "保留") return "メモの入力に戻る";
+        if (DETAIL_KEYS.has(last.result)) return "詳細の選択に戻る";
         if (last.answer != null) return "走者の確認に戻る";
         return "結果の選択に戻る";
       }
@@ -673,8 +676,9 @@ export default function App() {
       tap();
       if (mode === "zone") setMode("pitch");
       else if (mode === "result") { setMode("zone"); setDraft(null); }
+      else if (mode === "detail") setMode("result");
       else if (mode === "question") { setQuestion(null); setDraft({ zone: draft.zone }); setMode("result"); }
-      else if (mode === "hold-note") { setNote(""); setDraft({ zone: draft.zone }); setMode("result"); }
+      else if (mode === "hold-note") { setNote(""); setDraft({ zone: draft.zone }); setMode("detail"); }
       else if (mode === "runner-who") setMode("pitch");
       else if (mode === "runner-why") { setDraft(null); setMode(runnersOnBase.length === 1 ? "pitch" : "runner-who"); }
       return;
@@ -699,7 +703,8 @@ export default function App() {
       } else if (last.result === "保留") {
         setDraft({ zone: last.zone, result: "保留" }); setNote(last.note || ""); setMode("hold-note");
       } else {
-        setDraft({ zone: last.zone }); setQuestion(null); setMode("result");
+        setDraft({ zone: last.zone }); setQuestion(null);
+        setMode(DETAIL_KEYS.has(last.result) ? "detail" : "result");
       }
       return;
     }
@@ -843,6 +848,24 @@ export default function App() {
           <>
             <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>{POS[draft.zone]}への打球 — 結果は</div>
             {RESULT_GROUPS.map((g) => (
+              <div key={g.label} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>{g.label}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  {g.items.map((r) => (<Btn key={r.k} tone={g.tone} onClick={() => onResult(r.k)}>{r.l}</Btn>))}
+                </div>
+              </div>
+            ))}
+            <Btn tone="warn" onClick={() => { tap(); setMode("detail"); }}>詳細</Btn>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+              死球・犠打・振り逃げ・エラーの種類など。あとで決める場合もこちら
+            </div>
+          </>
+        )}
+
+        {mode === "detail" && (
+          <>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>{POS[draft.zone]}への打球 — 詳細</div>
+            {DETAIL_GROUPS.map((g) => (
               <div key={g.label} style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>{g.label}</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
