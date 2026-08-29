@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, RUNNER_REASONS, RESULT_GROUPS, RESOLVABLE,
+  POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS, RUNNER_REASONS, RESULT_GROUPS, RESOLVABLE,
   deriveState, questionFor, stateBefore, statsFrom, migrate, toSlots,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
   pitcherId, uniformOf, validateSub, inferSubKind, pid,
@@ -632,7 +632,7 @@ export default function App() {
     else setMode("runner-who");
   };
   const onRunnerWho = (base) => { tap(); setDraft({ from: base }); setMode("runner-why"); };
-  const onRunnerWhy = (r) => { tap(); commit({ t: "runner", from: draft.from, reason: r.label, out: r.out }); };
+  const onRunnerWhy = (r) => { tap(); commit({ t: "runner", from: draft.from, reason: r.k, out: r.out }); };
 
   const onZone = (z) => { tap(); setDraft({ zone: z }); setMode("result"); };
 
@@ -794,10 +794,10 @@ export default function App() {
       <div style={{ flex: 1, padding: 16 }}>
         {mode === "pitch" && (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-              <Btn tone="ghost" onClick={() => onPitch("ボール")}>ボール</Btn>
-              <Btn tone="ghost" onClick={() => onPitch("ストライク")}>ストライク</Btn>
-              <Btn tone="ghost" onClick={() => onPitch("ファウル")}>ファウル</Btn>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {PITCH_OPTIONS.map((p) => (
+                <Btn key={p.k} tone="ghost" onClick={() => onPitch(p.k)}>{p.l}</Btn>
+              ))}
             </div>
             <div style={{ marginTop: 12 }}><Btn onClick={() => { tap(); setMode("zone"); }}>打った</Btn></div>
             {runnersOnBase.length > 0 && (
@@ -824,7 +824,7 @@ export default function App() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {RUNNER_REASONS.map((r) => (
-                <Btn key={r.label} tone={r.out ? "warn" : "ghost"} onClick={() => onRunnerWhy(r)}>{r.label}</Btn>
+                <Btn key={r.k} tone={r.out ? "warn" : "ghost"} onClick={() => onRunnerWhy(r)}>{r.l}</Btn>
               ))}
             </div>
           </>
