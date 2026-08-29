@@ -43,6 +43,16 @@ export const RUNNER_REASONS = [
   { k: "けん制でアウト", l: "けん制でタッチアウト", out: true },
 ];
 
+/* 走者側の「詳細」。記法規約 §7 のうち頻度が低いもの */
+export const RUNNER_DETAIL = [
+  { k: "ボーク", l: "ボーク", out: false },
+  { k: "タッチアウト", l: "タッチアウト", out: true },
+  { k: "守備妨害", l: "守備妨害", out: true },
+  { k: "走塁妨害", l: "走塁妨害", out: false },
+];
+
+export const RUNNER_DETAIL_KEYS = new Set(RUNNER_DETAIL.map((r) => r.k));
+
 /* 学童では打球位置と結果の対応が一般論どおりにならないため、
    ゾーンによって選択肢を出し分けない。全ゾーンで同じ配置に固定し、
    記録者が位置で覚えられるようにする（§12.2）。
@@ -81,14 +91,9 @@ export const DETAIL_GROUPS = [
   {
     label: "出塁", tone: "ghost",
     items: [
-      { k: "死球", l: "死球" },
-      { k: "敬遠四球", l: "敬遠四球" },
-      { k: "振り逃げ", l: "振り逃げ" },
       { k: "バントヒット", l: "バントヒット" },
       { k: "テキサスヒット", l: "テキサスヒット" },
       { k: "ランニングホームラン", l: "ランニングホームラン" },
-      { k: "打撃妨害", l: "打撃妨害" },
-      { k: "走塁妨害", l: "走塁妨害" },
     ],
   },
   {
@@ -107,7 +112,6 @@ export const DETAIL_GROUPS = [
       { k: "犠牲バント", l: "犠牲バント" },
       { k: "ファールフライ", l: "ファールフライ" },
       { k: "インフィールドフライ", l: "インフィールドフライ" },
-      { k: "3バント失敗", l: "3バント失敗" },
       { k: "トリプルプレー", l: "トリプルプレー" },
     ],
   },
@@ -119,7 +123,29 @@ export const DETAIL_GROUPS = [
   },
 ];
 
+/* 打球を伴わない打席結果。打球方向を選ばせないため、
+   「打った」ではなく投球画面から直接入る（記法規約 §5／§6） */
+export const NO_BALL_GROUPS = [
+  {
+    label: "出塁", tone: "ghost",
+    items: [
+      { k: "死球", l: "死球" },
+      { k: "敬遠四球", l: "敬遠四球" },
+      { k: "振り逃げ", l: "振り逃げ" },
+      { k: "打撃妨害", l: "打撃妨害" },
+      { k: "走塁妨害", l: "走塁妨害" },
+    ],
+  },
+  {
+    label: "アウト", tone: "ghost",
+    items: [
+      { k: "3バント失敗", l: "3バント失敗" },
+    ],
+  },
+];
+
 export const DETAIL_KEYS = new Set(DETAIL_GROUPS.flatMap((g) => g.items.map((i) => i.k)));
+export const NO_BALL_KEYS = new Set(NO_BALL_GROUPS.flatMap((g) => g.items.map((i) => i.k)));
 
 /* 盤面への効き方が同じものをまとめる。記号は違っても導出は共通 */
 const HR_LIKE = new Set(["本塁打", "ランニングホームラン"]);
@@ -137,7 +163,7 @@ export const isErrorLike = (r) => ERROR_LIKE.has(r);
 export const needsZone = (r) => !NO_ZONE.has(r);
 
 /* 保留の確定で選べる結果。「保留」自体は選べない */
-export const RESOLVABLE = [...RESULT_GROUPS, ...DETAIL_GROUPS]
+export const RESOLVABLE = [...RESULT_GROUPS, ...DETAIL_GROUPS, ...NO_BALL_GROUPS]
   .map((g) => ({ ...g, items: g.items.filter((i) => i.k !== "保留") }))
   .filter((g) => g.items.length);
 
@@ -442,6 +468,14 @@ export function applyEvent(prev, e) {
     const runner = s.bases[e.from];
     if (runner == null) return s;
     const rtag = `${s.inning}回${s.isTop ? "表" : "裏"} #${uniformOf(runner)}`;
+
+    /* ボークは規約上「ランナー1塁進塁」。選んだ走者だけでなく全員が進む */
+    if (e.reason === "ボーク") {
+      advanceAll(s, 1);
+      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ボーク（走者が1つ進塁）`, { src });
+      return s;
+    }
+
     s.bases[e.from] = null;
     if (e.out) {
       s.outs += 1;
@@ -463,7 +497,7 @@ export function applyEvent(prev, e) {
     creditHalf(s);
     countPitch(s);
     s.plateAppearances[num] = (s.plateAppearances[num] || 0) + 1;
-    const where = POS[e.zone];
+    const where = e.zone == null ? "" : POS[e.zone];
     const r = e.result;
     const mark = e._resolved ? "（確定）" : "";
 

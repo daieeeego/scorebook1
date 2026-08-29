@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS, RUNNER_REASONS,
-  RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, RESOLVABLE,
+  POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS,
+  RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS,
+  RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
   deriveState, questionFor, stateBefore, statsFrom, migrate, toSlots,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
   pitcherId, uniformOf, validateSub, inferSubKind, pid,
@@ -639,32 +640,36 @@ export default function App() {
 
   const onResult = (r) => {
     tap();
-    if (r === "保留") { setDraft({ ...draft, result: r }); setNote(""); setMode("hold-note"); return; }
-    const q = questionFor(state, draft.zone, r);
-    if (q) { setDraft({ ...draft, result: r }); setQuestion(q); setMode("question"); }
-    else commit({ t: "inplay", zone: draft.zone, result: r });
+    const zone = draft ? draft.zone : null;
+    if (r === "保留") { setDraft({ zone, result: r }); setNote(""); setMode("hold-note"); return; }
+    const q = questionFor(state, zone, r);
+    if (q) { setDraft({ zone, result: r }); setQuestion(q); setMode("question"); }
+    else commit({ t: "inplay", zone, result: r });
   };
 
-  const onAnswer = (a) => { tap(); commit({ t: "inplay", zone: draft.zone, result: draft.result, answer: a }); };
+  const onAnswer = (a) => { tap(); commit({ t: "inplay", zone: draft ? draft.zone : null, result: draft.result, answer: a }); };
 
   const backTarget = () => {
     switch (mode) {
       case "zone": return "「打った」を取り消す";
+      case "no-ball": return "「打球以外」を取り消す";
       case "result": return "打球方向の選択に戻る";
       case "detail": return "結果の選択に戻る";
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
       case "runner-who": return "「走者が動いた」を取り消す";
       case "runner-why": return runnersOnBase.length === 1 ? "「走者が動いた」を取り消す" : "走者の選択に戻る";
+      case "runner-detail": return "理由の選択に戻る";
       default: {
         if (!events.length) return "戻せる記録がありません";
         const last = events[events.length - 1];
         if (last.t === "sub") return last.kind === "守備位置変更" ? "直前の守備位置変更を取り消す" : `直前の${last.kind}を取り消す`;
         if (last.t === "resolve") return "保留の確定を取り消す";
         if (last.t === "pitch") return "直前の投球を取り消す";
-        if (last.t === "runner") return "走者が動いた理由の選択に戻る";
+        if (last.t === "runner") return RUNNER_DETAIL_KEYS.has(last.reason) ? "詳細の選択に戻る" : "走者が動いた理由の選択に戻る";
         if (last.result === "保留") return "メモの入力に戻る";
         if (DETAIL_KEYS.has(last.result)) return "詳細の選択に戻る";
+        if (NO_BALL_KEYS.has(last.result)) return "打球以外の選択に戻る";
         if (last.answer != null) return "走者の確認に戻る";
         return "結果の選択に戻る";
       }
@@ -675,12 +680,14 @@ export default function App() {
     if (mode !== "pitch") {
       tap();
       if (mode === "zone") setMode("pitch");
+      else if (mode === "no-ball") { setMode("pitch"); setDraft(null); }
       else if (mode === "result") { setMode("zone"); setDraft(null); }
       else if (mode === "detail") setMode("result");
       else if (mode === "question") { setQuestion(null); setDraft({ zone: draft.zone }); setMode("result"); }
       else if (mode === "hold-note") { setNote(""); setDraft({ zone: draft.zone }); setMode("detail"); }
       else if (mode === "runner-who") setMode("pitch");
       else if (mode === "runner-why") { setDraft(null); setMode(runnersOnBase.length === 1 ? "pitch" : "runner-who"); }
+      else if (mode === "runner-detail") setMode("runner-why");
       return;
     }
     if (!events.length) return;
@@ -703,12 +710,17 @@ export default function App() {
       } else if (last.result === "保留") {
         setDraft({ zone: last.zone, result: "保留" }); setNote(last.note || ""); setMode("hold-note");
       } else {
-        setDraft({ zone: last.zone }); setQuestion(null);
-        setMode(DETAIL_KEYS.has(last.result) ? "detail" : "result");
+        setQuestion(null);
+        if (NO_BALL_KEYS.has(last.result)) { setDraft(null); setMode("no-ball"); }
+        else { setDraft({ zone: last.zone }); setMode(DETAIL_KEYS.has(last.result) ? "detail" : "result"); }
       }
       return;
     }
-    if (last.t === "runner") { setDraft({ from: last.from }); setQuestion(null); setMode("runner-why"); return; }
+    if (last.t === "runner") {
+      setDraft({ from: last.from }); setQuestion(null);
+      setMode(RUNNER_DETAIL_KEYS.has(last.reason) ? "runner-detail" : "runner-why");
+      return;
+    }
     setDraft(null); setQuestion(null); setMode("pitch");
   };
 
@@ -808,6 +820,26 @@ export default function App() {
             {runnersOnBase.length > 0 && (
               <div style={{ marginTop: 8 }}><Btn tone="ghost" onClick={onRunnerStart}>走者が動いた</Btn></div>
             )}
+            <div style={{ marginTop: 8 }}>
+              <Btn tone="warn" onClick={() => { tap(); setDraft(null); setMode("no-ball"); }}>打球以外</Btn>
+            </div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+              死球・振り逃げ・妨害など、打球のない結果
+            </div>
+          </>
+        )}
+
+        {mode === "no-ball" && (
+          <>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>打球のない結果</div>
+            {NO_BALL_GROUPS.map((g) => (
+              <div key={g.label} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>{g.label}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  {g.items.map((r) => (<Btn key={r.k} tone={g.tone} onClick={() => onResult(r.k)}>{r.l}</Btn>))}
+                </div>
+              </div>
+            ))}
           </>
         )}
 
@@ -831,6 +863,26 @@ export default function App() {
               {RUNNER_REASONS.map((r) => (
                 <Btn key={r.k} tone={r.out ? "warn" : "ghost"} onClick={() => onRunnerWhy(r)}>{r.l}</Btn>
               ))}
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <Btn tone="warn" onClick={() => { tap(); setMode("runner-detail"); }}>詳細</Btn>
+            </div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>ボーク・タッチアウト・妨害</div>
+          </>
+        )}
+
+        {mode === "runner-detail" && (
+          <>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>
+              {BASE[draft.from]}走者 #{uniformOf(state.bases[draft.from])} — 詳細
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {RUNNER_DETAIL.map((r) => (
+                <Btn key={r.k} tone={r.out ? "warn" : "ghost"} onClick={() => onRunnerWhy(r)}>{r.l}</Btn>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 8 }}>
+              ボークは走者全員が1つ進みます
             </div>
           </>
         )}
@@ -879,7 +931,7 @@ export default function App() {
         {mode === "hold-note" && (
           <>
             <div style={{ background: C.card, border: `2px solid ${C.red}`, borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 15 }}>
-              {POS[draft.zone]}への打球 — あとで決める
+              {draft.zone == null ? "あとで決める" : `${POS[draft.zone]}への打球 — あとで決める`}
               <div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>
                 何が起きたか、覚えているうちに残してください。空のままでも記録できます。
               </div>
