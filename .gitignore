@@ -5,3 +5,7 @@ dev-dist/
 *.local
 .env
 .vscode/
+
+# テスト成果物
+reports/
+.stryker-tmp/

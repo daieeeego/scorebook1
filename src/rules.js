@@ -20,13 +20,27 @@ export const HOLD_PRESETS = [
   "映像で確認する",
 ];
 
+/* 投球結果。k = 保存する名称 / l = 画面表示（記法規約 §2 の語）
+   見逃しと空振りを分けるのは、三振を K（見逃し三振）と SO（空振り三振）に
+   書き分けるために最後の投球の種別が要るため（記法規約 §5） */
+export const PITCH_OPTIONS = [
+  { k: "ボール", l: "ボール" },
+  { k: "見逃し", l: "見逃しストライク" },
+  { k: "空振り", l: "空振り" },
+  { k: "ファール", l: "ファール" },
+];
+
+const isStrike = (r) => r === "見逃し" || r === "空振り" || r === "ストライク";
+const isFoul = (r) => r === "ファール" || r === "ファウル";
+
+/* k = 保存する名称 / l = 画面表示（記法規約 §7 の語） */
 export const RUNNER_REASONS = [
-  { label: "盗塁", out: false },
-  { label: "暴投", out: false },
-  { label: "捕逸", out: false },
-  { label: "けん制の悪送球", out: false },
-  { label: "盗塁失敗", out: true },
-  { label: "けん制でアウト", out: true },
+  { k: "盗塁", l: "盗塁", out: false },
+  { k: "暴投", l: "ワイルドピッチ", out: false },
+  { k: "捕逸", l: "パスボール", out: false },
+  { k: "けん制の悪送球", l: "けん制の悪送球", out: false },
+  { k: "盗塁失敗", l: "盗塁アウト", out: true },
+  { k: "けん制でアウト", l: "けん制でタッチアウト", out: true },
 ];
 
 /* 学童では打球位置と結果の対応が一般論どおりにならないため、
@@ -38,24 +52,24 @@ export const RESULT_GROUPS = [
     label: "出塁", tone: "ghost",
     items: [
       { k: "安打", l: "ヒット" },
-      { k: "二塁打", l: "二塁まで" },
-      { k: "三塁打", l: "三塁まで" },
+      { k: "二塁打", l: "ツーベース" },
+      { k: "三塁打", l: "スリーベース" },
       { k: "本塁打", l: "ホームラン" },
-      { k: "失策で出塁", l: "守備のミスで出塁" },
+      { k: "失策で出塁", l: "エラー" },
     ],
   },
   {
     label: "アウト", tone: "ghost",
     items: [
-      { k: "ゴロアウト", l: "ゴロでアウト" },
-      { k: "フライアウト", l: "フライでアウト" },
-      { k: "ライナーアウト", l: "ライナーでアウト" },
+      { k: "ゴロアウト", l: "ゴロ" },
+      { k: "フライアウト", l: "フライ" },
+      { k: "ライナーアウト", l: "ライナー" },
     ],
   },
   {
     label: "その他", tone: "warn",
     items: [
-      { k: "野手選択", l: "走者がアウト・打者は一塁へ" },
+      { k: "野手選択", l: "フィルダースチョイス" },
       { k: "保留", l: "あとで決める" },
     ],
   },
@@ -344,18 +358,22 @@ export function applyEvent(prev, e) {
       }
       return s;
     }
-    if (e.r === "ストライク") {
+    if (isStrike(e.r)) {
       s.strikes += 1;
       if (s.strikes >= 3) {
         s.outs += 1;
         s.plateAppearances[num] = (s.plateAppearances[num] || 0) + 1;
-        push(s, `${t} 三振`, { src });
+        /* 記法規約 §5: K = 見逃し三振 / SO = 空振り三振 */
+        const kind = e.r === "見逃し" ? "K 見逃し三振"
+          : e.r === "空振り" ? "SO 空振り三振"
+          : "三振";
+        push(s, `${t} ${kind}`, { src });
         nextBatter(s);
         if (s.outs >= 3) endHalf(s);
       }
       return s;
     }
-    if (s.strikes < 2) s.strikes += 1;
+    if (isFoul(e.r) && s.strikes < 2) s.strikes += 1;
     return s;
   }
 
@@ -432,11 +450,11 @@ export function applyEvent(prev, e) {
       return s;
     }
     if (r === "ゴロアウト" || r === "フライアウト" || r === "ライナーアウト") {
-      if (e.answer === "併殺") {
+      if (e.answer === "ダブルプレー" || e.answer === "併殺") {
         s.outs += 2;
         s.bases[0] = null;
-        push(s, `${t} 併殺打（${where}）${mark}`, { src });
-      } else if (e.answer === "二塁でアウト") {
+        push(s, `${t} ダブルプレー（${where}）${mark}`, { src });
+      } else if (e.answer === "フォースアウト（二塁）" || e.answer === "二塁でアウト") {
         s.outs += 1;
         s.bases[0] = num;
         push(s, `${t} 野手選択（${where}）${mark}`, { src });
@@ -493,7 +511,7 @@ export function questionFor(state, zone, result) {
   if (result === "ゴロアウト" && state.bases[0] != null && state.outs < 2) {
     return {
       text: "一塁にいた走者はどうなりましたか",
-      options: ["二塁でアウト", "併殺", "二塁へ進んだ", "一塁に留まった"],
+      options: ["フォースアウト（二塁）", "ダブルプレー", "二塁へ進んだ", "一塁に留まった"],
     };
   }
   if ((result === "安打" || result === "失策で出塁") && state.bases[1] != null) {
