@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS,
-  RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS,
+  RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, THROW_REASONS,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
-  deriveState, questionFor, stateBefore, statsFrom, migrate, toSlots,
+  deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
   pitcherId, uniformOf, validateSub, inferSubKind, pid,
 } from "./rules.js";
@@ -634,7 +634,25 @@ export default function App() {
     else setMode("runner-who");
   };
   const onRunnerWho = (base) => { tap(); setDraft({ from: base }); setMode("runner-why"); };
-  const onRunnerWhy = (r) => { tap(); commit({ t: "runner", from: draft.from, reason: r.k, out: r.out }); };
+
+  const onRunnerWhy = (r) => {
+    tap();
+    if (THROW_REASONS.has(r.k)) { setDraft({ ...draft, reason: r }); setMode("runner-throw"); return; }
+    const q = runnerQuestionFor(state, draft.from, r.k);
+    if (q) { setDraft({ ...draft, reason: r }); setQuestion(q); setMode("runner-far"); return; }
+    commit({ t: "runner", from: draft.from, reason: r.k, out: r.out });
+  };
+
+  /* 盗塁アウトは捕手からの送球が前提。受けた野手だけを問う（2-6TO） */
+  const onRunnerThrow = (n) => {
+    tap();
+    commit({ t: "runner", from: draft.from, reason: draft.reason.k, out: true, fielders: [2, n] });
+  };
+
+  const onRunnerFar = (o) => {
+    tap();
+    commit({ t: "runner", from: draft.from, reason: draft.reason.k, out: false, to: o.to });
+  };
 
   const onZone = (z) => { tap(); setDraft({ zone: z }); setMode("result"); };
 
@@ -660,13 +678,19 @@ export default function App() {
       case "runner-who": return "「走者が動いた」を取り消す";
       case "runner-why": return runnersOnBase.length === 1 ? "「走者が動いた」を取り消す" : "走者の選択に戻る";
       case "runner-detail": return "理由の選択に戻る";
+      case "runner-throw": return "理由の選択に戻る";
+      case "runner-far": return "理由の選択に戻る";
       default: {
         if (!events.length) return "戻せる記録がありません";
         const last = events[events.length - 1];
         if (last.t === "sub") return last.kind === "守備位置変更" ? "直前の守備位置変更を取り消す" : `直前の${last.kind}を取り消す`;
         if (last.t === "resolve") return "保留の確定を取り消す";
         if (last.t === "pitch") return "直前の投球を取り消す";
-        if (last.t === "runner") return RUNNER_DETAIL_KEYS.has(last.reason) ? "詳細の選択に戻る" : "走者が動いた理由の選択に戻る";
+        if (last.t === "runner") {
+          if (last.fielders) return "送球先の選択に戻る";
+          if (last.to != null) return "進塁先の選択に戻る";
+          return RUNNER_DETAIL_KEYS.has(last.reason) ? "詳細の選択に戻る" : "走者が動いた理由の選択に戻る";
+        }
         if (last.result === "保留") return "メモの入力に戻る";
         if (DETAIL_KEYS.has(last.result)) return "詳細の選択に戻る";
         if (NO_BALL_KEYS.has(last.result)) return "打球以外の選択に戻る";
@@ -688,6 +712,7 @@ export default function App() {
       else if (mode === "runner-who") setMode("pitch");
       else if (mode === "runner-why") { setDraft(null); setMode(runnersOnBase.length === 1 ? "pitch" : "runner-who"); }
       else if (mode === "runner-detail") setMode("runner-why");
+      else if (mode === "runner-throw" || mode === "runner-far") { setQuestion(null); setMode("runner-why"); }
       return;
     }
     if (!events.length) return;
@@ -717,7 +742,11 @@ export default function App() {
       return;
     }
     if (last.t === "runner") {
-      setDraft({ from: last.from }); setQuestion(null);
+      const r = [...RUNNER_REASONS, ...RUNNER_DETAIL].find((x) => x.k === last.reason);
+      setDraft({ from: last.from, reason: r });
+      if (last.fielders) { setQuestion(null); setMode("runner-throw"); return; }
+      if (last.to != null) { setQuestion(runnerQuestionFor(prev, last.from, last.reason)); setMode("runner-far"); return; }
+      setQuestion(null);
       setMode(RUNNER_DETAIL_KEYS.has(last.reason) ? "runner-detail" : "runner-why");
       return;
     }
@@ -850,6 +879,10 @@ export default function App() {
               {runnersOnBase.map((r) => (
                 <Btn key={r.base} tone="ghost" onClick={() => onRunnerWho(r.base)}>{BASE[r.base]}走者 #{r.num}</Btn>
               ))}
+              <Btn tone="warn" onClick={() => onRunnerWho("all")}>全員（重盗）</Btn>
+            </div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+              複数の走者が同時に動いたときは「全員」。1つずつ進みます
             </div>
           </>
         )}
@@ -857,7 +890,9 @@ export default function App() {
         {mode === "runner-why" && (
           <>
             <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>
-              {BASE[draft.from]}走者 #{uniformOf(state.bases[draft.from])} が動いた理由は
+              {draft.from === "all"
+                ? "走者全員が動いた理由は"
+                : `${BASE[draft.from]}走者 #${uniformOf(state.bases[draft.from])} が動いた理由は`}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {RUNNER_REASONS.map((r) => (
@@ -874,7 +909,7 @@ export default function App() {
         {mode === "runner-detail" && (
           <>
             <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>
-              {BASE[draft.from]}走者 #{uniformOf(state.bases[draft.from])} — 詳細
+              {draft.from === "all" ? "走者全員 — 詳細" : `${BASE[draft.from]}走者 #${uniformOf(state.bases[draft.from])} — 詳細`}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {RUNNER_DETAIL.map((r) => (
@@ -883,6 +918,26 @@ export default function App() {
             </div>
             <div style={{ fontSize: 11, color: C.dim, marginTop: 8 }}>
               ボークは走者全員が1つ進みます
+            </div>
+          </>
+        )}
+
+        {mode === "runner-throw" && (
+          <>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 6 }}>捕手の送球を受けたのは</div>
+            <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.line}` }}>
+              <FieldPicker onPick={onRunnerThrow} />
+            </div>
+          </>
+        )}
+
+        {mode === "runner-far" && (
+          <>
+            <div style={{ background: C.card, border: `2px solid ${C.red}`, borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 15 }}>
+              {question.text}
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {question.options.map((o) => (<Btn key={o.to} onClick={() => onRunnerFar(o)}>{o.label}</Btn>))}
             </div>
           </>
         )}

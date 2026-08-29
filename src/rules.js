@@ -46,10 +46,18 @@ export const RUNNER_REASONS = [
 /* 走者側の「詳細」。記法規約 §7 のうち頻度が低いもの */
 export const RUNNER_DETAIL = [
   { k: "ボーク", l: "ボーク", out: false },
+  { k: "フォースアウト", l: "フォースアウト", out: true },
   { k: "タッチアウト", l: "タッチアウト", out: true },
   { k: "守備妨害", l: "守備妨害", out: true },
   { k: "走塁妨害", l: "走塁妨害", out: false },
 ];
+
+/* 送球の経路を記録する理由。記法規約 §7 の `2-6TO`（捕手→遊撃手）に対応する。
+   捕手からの送球が前提なので、受けた野手だけを問う */
+export const THROW_REASONS = new Set(["盗塁失敗"]);
+
+/* 2つ以上進むことがある理由。盗塁は1つずつなので含めない */
+const MULTI_BASE_REASONS = new Set(["暴投", "捕逸", "けん制の悪送球"]);
 
 export const RUNNER_DETAIL_KEYS = new Set(RUNNER_DETAIL.map((r) => r.k));
 
@@ -465,6 +473,15 @@ export function applyEvent(prev, e) {
 
   if (e.t === "runner") {
     creditHalf(s);
+
+    /* 重盗など、複数の走者が同時に動く場合。走者ごとに入力させると
+       押し忘れた分だけ盤面がずれるため、1イベントで全員を進める */
+    if (e.from === "all") {
+      advanceAll(s, 1);
+      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ${e.reason}（走者が1つ進塁）`, { src });
+      return s;
+    }
+
     const runner = s.bases[e.from];
     if (runner == null) return s;
     const rtag = `${s.inning}回${s.isTop ? "表" : "裏"} #${uniformOf(runner)}`;
@@ -479,16 +496,18 @@ export function applyEvent(prev, e) {
     s.bases[e.from] = null;
     if (e.out) {
       s.outs += 1;
-      push(s, `${rtag} ${e.reason}`, { src });
+      const via = e.fielders && e.fielders.length ? `（${e.fielders.join("-")}）` : "";
+      push(s, `${rtag} ${e.reason}${via}`, { src });
       if (s.outs >= 3) endHalf(s);
       return s;
     }
-    if (e.from === 2) {
+    const to = e.to != null ? e.to : e.from + 1;
+    if (to >= 3) {
       s.score[batKey(s)] += 1;
       push(s, `${rtag} ${e.reason}で生還`, { src });
     } else {
-      s.bases[e.from + 1] = runner;
-      push(s, `${rtag} ${e.reason}（${BASE[e.from]}→${BASE[e.from + 1]}）`, { src });
+      s.bases[to] = runner;
+      push(s, `${rtag} ${e.reason}（${BASE[e.from]}→${BASE[to]}）`, { src });
     }
     return s;
   }
@@ -659,6 +678,20 @@ export function questionFor(state, zone, result) {
     };
   }
   return null;
+}
+
+/** 走者が2つ以上進み得る場面だけ、どこまで進んだかを問う。
+    暴投を2回入力させると投手成績の暴投数が二重に計上されるため */
+export function runnerQuestionFor(state, from, reason) {
+  if (from === "all" || from == null) return null;
+  if (!MULTI_BASE_REASONS.has(reason)) return null;
+  const options = [];
+  for (let to = from + 1; to <= 3; to++) {
+    if (to < 3 && state.bases[to] != null) break;   // 先の塁が塞がっていたらそこまで
+    options.push({ to, label: to === 3 ? "本塁まで" : `${BASE[to]}まで` });
+  }
+  if (options.length <= 1) return null;
+  return { text: `${BASE[from]}走者はどこまで進みましたか`, options };
 }
 
 /** 保留を確定するときは、その打席の時点の盤面で質問し直す */
