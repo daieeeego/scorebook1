@@ -662,12 +662,6 @@ export default function App() {
     .map((r, i) => (r != null ? { base: i, num: uniformOf(r) } : null))
     .filter(Boolean);
 
-  const onRunnerStart = () => {
-    tap();
-    if (runnersOnBase.length === 1) { setDraft({ from: runnersOnBase[0].base }); setMode("runner-why"); }
-    else setMode("runner-who");
-  };
-  const onRunnerWho = (base) => { tap(); setDraft({ from: base }); setMode("runner-why"); };
 
   const onRunnerWhy = (r) => {
     tap();
@@ -726,8 +720,7 @@ export default function App() {
       case "moves": return "結果の選択に戻る";
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
-      case "runner-who": return "「走者が動いた」を取り消す";
-      case "runner-why": return runnersOnBase.length === 1 ? "「走者が動いた」を取り消す" : "走者の選択に戻る";
+      case "runner-why": return "走者の選択を取り消す";
       case "runner-detail": return "理由の選択に戻る";
       case "runner-throw": return "理由の選択に戻る";
       case "runner-far": return "理由の選択に戻る";
@@ -765,8 +758,7 @@ export default function App() {
       }
       else if (mode === "question") { setQuestion(null); setDraft({ zone: draft.zone }); setMode("result"); }
       else if (mode === "hold-note") { setNote(""); setDraft({ zone: draft.zone }); setMode("detail"); }
-      else if (mode === "runner-who") setMode("pitch");
-      else if (mode === "runner-why") { setDraft(null); setMode(runnersOnBase.length === 1 ? "pitch" : "runner-who"); }
+      else if (mode === "runner-why") { setDraft(null); setMode("pitch"); }
       else if (mode === "runner-detail") setMode("runner-why");
       else if (mode === "runner-throw" || mode === "runner-far") { setQuestion(null); setMode("runner-why"); }
       return;
@@ -905,20 +897,35 @@ export default function App() {
               ))}
             </div>
             <div style={{ marginTop: 12 }}><Btn onClick={() => { tap(); setMode("zone"); }}>打った</Btn></div>
-            {runnersOnBase.length > 0 && (
-              <>
-                <div style={{ marginTop: 8 }}><Btn tone="ghost" onClick={onRunnerStart}>走者が動いた</Btn></div>
-                <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
-                  打球で走者がさらに進んだときも、ここから「打球で進塁」
-                </div>
-              </>
-            )}
             <div style={{ marginTop: 8 }}>
               <Btn tone="warn" onClick={() => { tap(); setDraft(null); setMode("no-ball"); }}>打球以外</Btn>
             </div>
             <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
               死球・振り逃げ・妨害など、打球のない結果
             </div>
+
+            {/* 塁上の走者を常に出す。打者と同じく、ここから直接押せる。
+                盗塁が最も多いため1タップ、それ以外は「その他」から選ぶ */}
+            {runnersOnBase.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>走者</div>
+                {runnersOnBase.map((r) => (
+                  <div key={r.base} style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                    <span style={{ fontSize: 14, width: 78 }}>
+                      {BASE[r.base]}<b style={{ fontFamily: MONO, marginLeft: 4 }}>#{r.num}</b>
+                    </span>
+                    <SmallBtn onClick={() => { tap(); commit({ t: "runner", from: r.base, reason: "盗塁", out: false }); }}>盗塁</SmallBtn>
+                    <SmallBtn onClick={() => { tap(); setDraft({ from: r.base }); setMode("runner-why"); }}>その他</SmallBtn>
+                  </div>
+                ))}
+                {runnersOnBase.length > 1 && (
+                  <SmallBtn onClick={() => { tap(); setDraft({ from: "all" }); setMode("runner-why"); }}>全員が動いた（重盗）</SmallBtn>
+                )}
+                <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
+                  打球で走者がさらに進んだときは「その他」→「打球で進塁」
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -933,21 +940,6 @@ export default function App() {
                 </div>
               </div>
             ))}
-          </>
-        )}
-
-        {mode === "runner-who" && (
-          <>
-            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>動いた走者は</div>
-            <div style={{ display: "grid", gap: 8 }}>
-              {runnersOnBase.map((r) => (
-                <Btn key={r.base} tone="ghost" onClick={() => onRunnerWho(r.base)}>{BASE[r.base]}走者 #{r.num}</Btn>
-              ))}
-              <Btn tone="warn" onClick={() => onRunnerWho("all")}>全員（重盗）</Btn>
-            </div>
-            <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
-              複数の走者が同時に動いたときは「全員」。1つずつ進みます
-            </div>
           </>
         )}
 
