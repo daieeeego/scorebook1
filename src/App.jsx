@@ -4,6 +4,7 @@ import {
   RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, THROW_REASONS,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
   deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
+  defaultMoves, moveOptions, validateMoves,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
   pitcherId, uniformOf, validateSub, inferSubKind, pid,
 } from "./rules.js";
@@ -76,6 +77,32 @@ function PosSelect({ value, onChange }) {
       <option value="">守備 —</option>
       {POSITIONS.map((p) => <option key={p} value={p}>{p} {POS[p]}</option>)}
     </select>
+  );
+}
+
+/* 打球1つに対する、1人ぶんの行き先。選ばれているものを反転表示する */
+function MoveRow({ label, options, value, onPick }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 13, color: C.sub, marginBottom: 4 }}>{label}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {options.map((o) => {
+          const on = o.to === value;
+          const danger = o.to === -1;
+          return (
+            <button key={o.to} onClick={() => onPick(o.to)}
+              style={{
+                minHeight: 44, padding: "0 12px", borderRadius: 8, fontSize: 14, fontWeight: 600,
+                background: on ? (danger ? C.red : C.ink) : C.card,
+                color: on ? "#fff" : (danger ? C.red : C.ink),
+                border: `2px solid ${on ? (danger ? C.red : C.ink) : C.line}`,
+              }}>
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -567,6 +594,7 @@ export default function App() {
   const [tapsThis, setTapsThis] = useState(0);
   const [showSetup, setShowSetup] = useState(false);
   const [showSheet, setShowSheet] = useState(false);
+  const [movesErr, setMovesErr] = useState("");
   const fileRef = useRef(null);
 
   /* 1操作ごとに自動保存。試合中に閉じても消えない */
@@ -666,9 +694,25 @@ export default function App() {
     tap();
     const zone = draft ? draft.zone : null;
     if (r === "保留") { setDraft({ zone, result: r }); setNote(""); setMode("hold-note"); return; }
-    const q = questionFor(state, zone, r);
-    if (q) { setDraft({ zone, result: r }); setQuestion(q); setMode("question"); }
-    else commit({ t: "inplay", zone, result: r });
+    const moves = defaultMoves(state, r);
+    /* 走者がいなければ行き先は一通りに決まるので、確認画面を出さない */
+    if (state.bases.every((b) => b == null)) { commit({ t: "inplay", zone, result: r, moves }); return; }
+    setMovesErr("");
+    setDraft({ zone, result: r, moves });
+    setMode("moves");
+  };
+
+  const setMove = (from, to) => {
+    tap();
+    setMovesErr("");
+    setDraft((d) => ({ ...d, moves: d.moves.map((m) => (m.from === from ? { ...m, to } : m)) }));
+  };
+
+  const commitMoves = () => {
+    const problem = validateMoves(draft.moves);
+    if (problem) { setMovesErr(problem); return; }
+    tap();
+    commit({ t: "inplay", zone: draft.zone, result: draft.result, moves: draft.moves });
   };
 
   const onAnswer = (a) => { tap(); commit({ t: "inplay", zone: draft ? draft.zone : null, result: draft.result, answer: a }); };
@@ -679,6 +723,7 @@ export default function App() {
       case "no-ball": return "「打球以外」を取り消す";
       case "result": return "打球方向の選択に戻る";
       case "detail": return "結果の選択に戻る";
+      case "moves": return "結果の選択に戻る";
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
       case "runner-who": return "「走者が動いた」を取り消す";
@@ -713,6 +758,11 @@ export default function App() {
       else if (mode === "no-ball") { setMode("pitch"); setDraft(null); }
       else if (mode === "result") { setMode("zone"); setDraft(null); }
       else if (mode === "detail") setMode("result");
+      else if (mode === "moves") {
+        setMovesErr("");
+        if (draft.zone == null) setMode("no-ball");
+        else setMode(DETAIL_KEYS.has(draft.result) ? "detail" : "result");
+      }
       else if (mode === "question") { setQuestion(null); setDraft({ zone: draft.zone }); setMode("result"); }
       else if (mode === "hold-note") { setNote(""); setDraft({ zone: draft.zone }); setMode("detail"); }
       else if (mode === "runner-who") setMode("pitch");
@@ -742,7 +792,10 @@ export default function App() {
         setDraft({ zone: last.zone, result: "保留" }); setNote(last.note || ""); setMode("hold-note");
       } else {
         setQuestion(null);
-        if (NO_BALL_KEYS.has(last.result)) { setDraft(null); setMode("no-ball"); }
+        if (last.moves) {
+          setDraft({ zone: last.zone, result: last.result, moves: last.moves });
+          setMovesErr(""); setMode("moves");
+        } else if (NO_BALL_KEYS.has(last.result)) { setDraft(null); setMode("no-ball"); }
         else { setDraft({ zone: last.zone }); setMode(DETAIL_KEYS.has(last.result) ? "detail" : "result"); }
       }
       return;
@@ -1016,6 +1069,30 @@ export default function App() {
             <Btn onClick={() => { tap(); commit({ t: "inplay", zone: draft.zone, result: "保留", note: note.trim() }); setNote(""); }}>
               記録して進む
             </Btn>
+          </>
+        )}
+
+        {mode === "moves" && (
+          <>
+            <div style={{ fontSize: 15, marginBottom: 2 }}>
+              {draft.zone == null ? draft.result : `${POS[draft.zone]}への打球 ─ ${draft.result}`}
+            </div>
+            <div style={{ fontSize: 12, color: C.dim, marginBottom: 10 }}>
+              走者の行き先。このままでよければ下を押す
+            </div>
+            {[2, 1, 0].filter((i) => state.bases[i] != null).map((i) => (
+              <MoveRow key={i}
+                label={`${BASE[i]}走者 #${uniformOf(state.bases[i])}`}
+                options={moveOptions(state, i)}
+                value={(draft.moves.find((m) => m.from === i) || {}).to}
+                onPick={(to) => setMove(i, to)} />
+            ))}
+            <MoveRow label={`打者 #${batterNum(state)}`}
+              options={moveOptions(state, -1)}
+              value={(draft.moves.find((m) => m.from === -1) || {}).to}
+              onPick={(to) => setMove(-1, to)} />
+            {movesErr && <div style={{ color: C.red, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{movesErr}</div>}
+            <Btn onClick={commitMoves}>この内容で記録する</Btn>
           </>
         )}
 

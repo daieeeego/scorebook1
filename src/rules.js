@@ -553,6 +553,19 @@ export function applyEvent(prev, e) {
     const r = e.result;
     const mark = e._resolved ? "（確定）" : "";
 
+    /* 走者の行き先が指定されていれば、それを正とする。
+       打者結果から進塁を導出する下の分岐は、moves を持たない過去データ用 */
+    if (e.moves) {
+      const { scored, out } = applyMoves(s, e.moves, num);
+      const outNote = out.length ? ` ${out.map((x) => `#${uniformOf(x)}`).join("・")}アウト` : "";
+      const zoneNote = e.zone == null ? "" : `（${where}）`;
+      push(s, `${t} ${r}${zoneNote}${outNote}${runsNote(scored)}${e.note ? " — " + e.note : ""}${mark}`,
+        { src, pending: r === "保留" && !e._resolved });
+      nextBatter(s);
+      if (s.outs >= 3) endHalf(s);
+      return s;
+    }
+
     /* --- 詳細（記法規約 §5／§6 の追加分） --- */
 
     if (PUSH_LIKE.has(r)) {
@@ -714,6 +727,90 @@ export function questionFor(state, zone, result) {
     };
   }
   return null;
+}
+
+/* ---------------- 打球1つに対する走者の行き先 ----------------
+   手書きのスコアブックは、打球の記号（打者結果）とは別に、走者ごとの
+   行き先をダイヤ図の線で書く。打者結果から進塁を固定で導出していると
+   紙と同じ記録にならないため、行き先を moves として持つ。
+
+   from: -1 = 打者 / 0,1,2 = 塁
+   to:   -1 = アウト / 0,1,2 = 塁 / 3 = 本塁 */
+
+/** その打席結果でふつう起きる行き先。画面の初期値に使う */
+export function defaultMoves(s, result) {
+  const b = s.bases;
+  const mv = [];
+  const on = [2, 1, 0].filter((i) => b[i] != null);   // 先の塁から
+  const hold = () => on.forEach((i) => mv.push({ from: i, to: i }));
+
+  if (HR_LIKE.has(result)) { on.forEach((i) => mv.push({ from: i, to: 3 })); mv.push({ from: -1, to: 3 }); return mv; }
+  if (result === "三塁打") { on.forEach((i) => mv.push({ from: i, to: 3 })); mv.push({ from: -1, to: 2 }); return mv; }
+  if (result === "二塁打") { on.forEach((i) => mv.push({ from: i, to: Math.min(i + 2, 3) })); mv.push({ from: -1, to: 1 }); return mv; }
+  if (HIT_LIKE.has(result) || ERROR_LIKE.has(result)) {
+    on.forEach((i) => mv.push({ from: i, to: Math.min(i + 1, 3) }));
+    mv.push({ from: -1, to: 0 }); return mv;
+  }
+  if (result === "保留") { hold(); mv.push({ from: -1, to: 0 }); return mv; }
+  if (PUSH_LIKE.has(result)) {
+    let j = 0;
+    while (j <= 2 && b[j] != null) { mv.push({ from: j, to: j + 1 }); j++; }
+    for (let i = j; i <= 2; i++) if (b[i] != null) mv.push({ from: i, to: i });
+    mv.push({ from: -1, to: 0 }); return mv;
+  }
+  if (result === "野手選択") {
+    const lead = b[0] != null ? 0 : b[1] != null ? 1 : b[2] != null ? 2 : -1;
+    on.forEach((i) => mv.push({ from: i, to: i === lead ? -1 : i }));
+    mv.push({ from: -1, to: 0 }); return mv;
+  }
+  if (result === "犠牲フライ") { on.forEach((i) => mv.push({ from: i, to: i === 2 ? 3 : i })); mv.push({ from: -1, to: -1 }); return mv; }
+  if (result === "犠牲バント") { on.forEach((i) => mv.push({ from: i, to: Math.min(i + 1, 3) })); mv.push({ from: -1, to: -1 }); return mv; }
+  if (result === "トリプルプレー") {
+    on.forEach((i, k) => mv.push({ from: i, to: k < 2 ? -1 : i }));
+    mv.push({ from: -1, to: -1 }); return mv;
+  }
+  hold(); mv.push({ from: -1, to: -1 }); return mv;      // ゴロ・フライ・ライナーなど
+}
+
+/** その走者が選べる行き先。塁の重複と逆走を作らせない（§7.1 第1層） */
+export function moveOptions(s, from) {
+  const opts = [];
+  if (from === -1) {
+    opts.push({ to: -1, label: "アウト" });
+    for (let t = 0; t <= 3; t++) opts.push({ to: t, label: t === 3 ? "本塁（得点）" : `${BASE[t]}` });
+    return opts;
+  }
+  opts.push({ to: from, label: "留まる" });
+  for (let t = from + 1; t <= 3; t++) opts.push({ to: t, label: t === 3 ? "本塁（得点）" : `${BASE[t]}まで` });
+  opts.push({ to: -1, label: "アウト" });
+  return opts;
+}
+
+/** moves に矛盾がないか。問題なければ null */
+export function validateMoves(moves) {
+  const used = new Map();
+  for (const m of moves) {
+    if (m.to < 0 || m.to > 2) continue;
+    if (used.has(m.to)) return `${BASE[m.to]}に2人置くことはできません`;
+    used.set(m.to, m.from);
+  }
+  return null;
+}
+
+/** moves を盤面に適用する。生還した走者とアウトになった走者を返す */
+function applyMoves(s, moves, batter) {
+  const before = [...s.bases];
+  const scored = [];
+  const out = [];
+  s.bases = [null, null, null];
+  for (const m of moves) {
+    const pid = m.from === -1 ? batter : before[m.from];
+    if (pid == null) continue;
+    if (m.to === -1) { s.outs += 1; out.push(pid); continue; }
+    if (m.to >= 3) { s.score[batKey(s)] += 1; scored.push(pid); continue; }
+    s.bases[m.to] = pid;
+  }
+  return { scored, out };
 }
 
 /** 直前が打席結果で、間に投球が無ければ、その走者の動きはその打者の打球によるもの。
