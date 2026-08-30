@@ -118,27 +118,33 @@ function MiniDiamond({ bases }) {
   );
 }
 
-/* 実測で 一(3)-二(4) と 三(5)-遊(6) の円が重なっていた（中心間51.8px・直径54.9px）。
-   押し分けられないため、内野手を各塁の実際の位置へ寄せて間隔を取った。
-   どの2点も円のすき間が10px以上空くようにしてある */
+/* 呼び名をカタカナにしたため、1文字前提の円では収まらない。
+   文字数に合わせた角丸で置き、どの2つもすき間が10px以上空くよう配置した。
+   高さ40（実寸45.7px）で NFR-03 の44px以上を満たす */
+const PICKER_FS = 13, PICKER_H = 40, PICKER_PAD = 20;
 const FIELDERS = [
-  { n: 1, x: 150, y: 152 }, { n: 2, x: 150, y: 226 }, { n: 3, x: 238, y: 142 },
-  { n: 4, x: 196, y: 88 }, { n: 5, x: 62, y: 142 }, { n: 6, x: 104, y: 88 },
-  { n: 7, x: 48, y: 44 }, { n: 8, x: 150, y: 34 }, { n: 9, x: 252, y: 44 },
+  { n: 1, x: 150, y: 152 }, { n: 2, x: 150, y: 220 }, { n: 3, x: 250, y: 146 },
+  { n: 4, x: 204, y: 95 }, { n: 5, x: 50, y: 146 }, { n: 6, x: 96, y: 95 },
+  { n: 7, x: 45, y: 46 }, { n: 8, x: 150, y: 28 }, { n: 9, x: 255, y: 46 },
 ];
 
 function FieldPicker({ onPick }) {
   return (
-    <svg viewBox="0 0 300 250" style={{ width: "100%", maxHeight: 280 }}>
+    <svg viewBox="0 0 300 250" style={{ width: "100%", maxHeight: 300 }}>
       <path d="M150 214 L300 64 L300 0 L0 0 L0 64 Z" fill={C.field} />
       <path d="M150 214 L60 124 L150 34 L240 124 Z" fill="none" stroke={C.line} strokeWidth="2" />
       <path d="M150 214 L20 84 M150 214 L280 84" stroke={C.line} strokeWidth="1.5" fill="none" />
-      {FIELDERS.map((f) => (
-        <g key={f.n} onClick={() => onPick(f.n)} style={{ cursor: "pointer" }}>
-          <circle cx={f.x} cy={f.y} r="24" fill={C.card} stroke={C.ink} strokeWidth="1.6" />
-          <text x={f.x} y={f.y + 7} textAnchor="middle" fontSize="19" fill={C.ink} fontWeight="600">{POS[f.n]}</text>
-        </g>
-      ))}
+      {FIELDERS.map((f) => {
+        const w = POS[f.n].length * PICKER_FS + PICKER_PAD;
+        return (
+          <g key={f.n} onClick={() => onPick(f.n)} style={{ cursor: "pointer" }}>
+            <rect x={f.x - w / 2} y={f.y - PICKER_H / 2} width={w} height={PICKER_H} rx="10"
+              fill={C.card} stroke={C.ink} strokeWidth="1.6" />
+            <text x={f.x} y={f.y + PICKER_FS / 2 + 1} textAnchor="middle"
+              fontSize={PICKER_FS} fill={C.ink} fontWeight="600">{POS[f.n]}</text>
+          </g>
+        );
+      })}
     </svg>
   );
 }
