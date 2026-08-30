@@ -176,20 +176,39 @@ const BATTER_OUT_ONLY = new Set(["ファールフライ", "インフィールド
 /* 打球ではないため、打球方向を記録しない */
 const NO_ZONE = new Set(["死球", "敬遠四球", "打撃妨害", "走塁妨害", "振り逃げ", "3バント失敗"]);
 
-/** 打球にかかわった守備の順。記法規約 §3 の `6-3` に相当する。
-    内野ゴロで打者がアウトになる形は一塁送球で決まるため、指定がなければ導出する。
-    それ以外（併殺の中継、エラーを挟む `5E-3` など）は指定が要る */
-export function defaultFielders(zone, result, moves) {
-  if (zone == null) return [];
-  const GROUNDER = new Set(["ゴロアウト", "ゴロエラー", "犠牲バント", "野手選択"]);
-  if (!GROUNDER.has(result)) return [zone];
-  const batter = (moves || []).find((m) => m.from === -1);
-  /* 打者が一塁でアウト＝その野手から一塁へ送球。一塁手が自分で踏んだ場合は送球なし */
-  if (batter && batter.to === -1 && zone !== 3) return [zone, 3];
-  return [zone];
+/** 守備の関与順を記法規約 §3 の形に組み立てる。
+    `6-3` / `5E-3`（サードのエラーから一塁へ） / `6ET-3`（悪送球・高投） */
+export function fieldersNotation(seq) {
+  if (!seq || !seq.f || !seq.f.length) return "";
+  return seq.f
+    .map((n, i) => (i === seq.errorAt ? `${n}E${seq.kind || ""}` : String(n)))
+    .join("-");
 }
 
-export const fieldersText = (f) => (f && f.length > 1 ? f.map((n) => (n === 3 ? "3" : String(n))).join("-") : f && f.length ? String(f[0]) : "");
+/* エラーの種類 → 記法規約 §6 の添え字 */
+const ERROR_KIND = { "悪送球（高投）": "T", "悪送球（低投）": "⊥" };
+/* 一塁へ送球して打者を処理する打球 */
+const TO_FIRST = new Set(["ゴロアウト", "犠牲バント", "野手選択", "ゴロエラー", "悪送球（高投）", "悪送球（低投）"]);
+
+/** 指定がないときの関与順。内野ゴロは送球先が一塁に決まるため導出できる。
+    併殺の中継や `1-3E`（受け手のエラー）は決まらないので、明示が要る */
+export function defaultFielders(zone, result, moves) {
+  if (zone == null) return { f: [], errorAt: null, kind: "" };
+  const isError = ERROR_LIKE.has(result);
+  const errorAt = isError ? 0 : null;
+  const kind = ERROR_KIND[result] || "";
+  if (!TO_FIRST.has(result) || zone === 3) return { f: [zone], errorAt, kind };
+  const batter = (moves || []).find((m) => m.from === -1);
+  /* 打者が一塁でアウト、またはエラーで一塁へ達した＝一塁への送球があった */
+  if (isError || (batter && batter.to === -1)) return { f: [zone, 3], errorAt, kind };
+  return { f: [zone], errorAt, kind };
+}
+
+/** イベントに指定があればそれを、無ければ導出したものを返す */
+export const fieldersOf = (e) =>
+  (e.fielders && e.fielders.length
+    ? { f: e.fielders, errorAt: e.errorAt == null ? null : e.errorAt, kind: e.errorKind || "" }
+    : defaultFielders(e.zone, e.result, e.moves));
 
 export const isHitLike = (r) => HIT_LIKE.has(r);
 export const isErrorLike = (r) => ERROR_LIKE.has(r);
@@ -589,10 +608,11 @@ export function applyEvent(prev, e) {
     /* 走者の行き先が指定されていれば、それを正とする。
        打者結果から進塁を導出する下の分岐は、moves を持たない過去データ用 */
     if (e.moves) {
-      const f = e.fielders && e.fielders.length ? e.fielders : defaultFielders(e.zone, r, e.moves);
+      const seq = fieldersOf(e);
+      const fText = fieldersNotation(seq);
       const { scored, out } = applyMoves(s, e.moves, num);
       const outNote = out.length ? ` ${out.map((x) => `#${uniformOf(x)}`).join("・")}アウト` : "";
-      const zoneNote = e.zone == null ? "" : `（${where}${f.length > 1 ? ` ${fieldersText(f)}` : ""}）`;
+      const zoneNote = e.zone == null ? "" : `（${where}${fText && fText !== String(e.zone) ? ` ${fText}` : ""}）`;
       push(s, `${t} ${r}${zoneNote}${outNote}${runsNote(scored)}${e.note ? " — " + e.note : ""}${mark}`,
         { src, pending: r === "保留" && !e._resolved });
       nextBatter(s);
