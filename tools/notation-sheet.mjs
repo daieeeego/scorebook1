@@ -52,7 +52,7 @@ function resultMark(r, zone, answer) {
     default:            return r;
   }
 }
-const RUNNER_MARK = { "盗塁":"S", "暴投":"WP", "捕逸":"PS", "けん制の悪送球":"けん制E",
+const RUNNER_MARK = { "打球で進塁":"進", "盗塁":"S", "暴投":"WP", "捕逸":"PS", "けん制の悪送球":"けん制E",
   "盗塁失敗":"TO", "けん制でアウト":"けん制TO", "ボーク":"BK", "タッチアウト":"TO",
   "守備妨害":"IP", "走塁妨害":"OB", "フォースアウト":"FO" };
 

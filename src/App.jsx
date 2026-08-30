@@ -853,7 +853,12 @@ export default function App() {
             </div>
             <div style={{ marginTop: 12 }}><Btn onClick={() => { tap(); setMode("zone"); }}>打った</Btn></div>
             {runnersOnBase.length > 0 && (
-              <div style={{ marginTop: 8 }}><Btn tone="ghost" onClick={onRunnerStart}>走者が動いた</Btn></div>
+              <>
+                <div style={{ marginTop: 8 }}><Btn tone="ghost" onClick={onRunnerStart}>走者が動いた</Btn></div>
+                <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+                  打球で走者がさらに進んだときも、ここから「打球で進塁」
+                </div>
+              </>
             )}
             <div style={{ marginTop: 8 }}>
               <Btn tone="warn" onClick={() => { tap(); setDraft(null); setMode("no-ball"); }}>打球以外</Btn>

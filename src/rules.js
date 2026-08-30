@@ -35,6 +35,10 @@ const isFoul = (r) => r === "ファール" || r === "ファウル";
 
 /* k = 保存する名称 / l = 画面表示（記法規約 §7 の語） */
 export const RUNNER_REASONS = [
+  /* 打者の打球で走者がさらに進んだ場合。打席結果は走者の進塁を固定で導出する
+     （単打なら一塁走者は二塁まで等）が、学童では余分に進むことが普通に起きる。
+     打席結果の直後に記録されたものは、その打者の打球によるものとみなす */
+  { k: "打球で進塁", l: "打球で進塁", out: false },
   { k: "盗塁", l: "盗塁", out: false },
   { k: "暴投", l: "ワイルドピッチ", out: false },
   { k: "捕逸", l: "パスボール", out: false },
@@ -57,7 +61,7 @@ export const RUNNER_DETAIL = [
 export const THROW_REASONS = new Set(["盗塁失敗"]);
 
 /* 2つ以上進むことがある理由。盗塁は1つずつなので含めない */
-const MULTI_BASE_REASONS = new Set(["暴投", "捕逸", "けん制の悪送球"]);
+const MULTI_BASE_REASONS = new Set(["打球で進塁", "暴投", "捕逸", "けん制の悪送球"]);
 
 export const RUNNER_DETAIL_KEYS = new Set(RUNNER_DETAIL.map((r) => r.k));
 
@@ -708,6 +712,19 @@ export function questionFor(state, zone, result) {
         ? ["三塁で止まった", "本塁まで進んだ"]
         : ["二塁に留まった", "三塁で止まった", "本塁まで進んだ"],
     };
+  }
+  return null;
+}
+
+/** 直前が打席結果で、間に投球が無ければ、その走者の動きはその打者の打球によるもの。
+    記法規約 §7 の `(4)`（4番バッター時ランナー進塁）を導出するために使う */
+export function attributedBatter(events, index) {
+  for (let i = index - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.t === "runner") continue;
+    if (e.t === "sub") continue;
+    if (e.t === "inplay") return i;
+    return null;                    // 投球を挟んでいれば、その打者のものではない
   }
   return null;
 }
