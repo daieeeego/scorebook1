@@ -452,7 +452,7 @@ function StatsTab({ state }) {
                     {!p.active && "／退場"}
                   </span>
                 </span>
-                <span style={{ fontSize: 12, color: C.sub }}>{p.plateAppearances}打席</span>
+                <span style={{ fontSize: 12, color: C.sub }}>{p.plateAppearances}打席{p.leftOnBase ? `・残塁${p.leftOnBase}` : ""}</span>
                 <b style={{ fontFamily: MONO }}>{p.halves}回</b>
               </div>
             ))}
@@ -601,6 +601,7 @@ export default function App() {
   const [showSetup, setShowSetup] = useState(false);
   const [showSheet, setShowSheet] = useState(false);
   const [movesErr, setMovesErr] = useState("");
+  const [rewindTo, setRewindTo] = useState(null);   // ログから選んだ巻き戻し先
   const fileRef = useRef(null);
 
   /* 1操作ごとに自動保存。試合中に閉じても消えない */
@@ -808,6 +809,16 @@ export default function App() {
       return;
     }
     setDraft(null); setQuestion(null); setMode("pitch");
+  };
+
+  /* ログの行を選んで、そこから後をまとめて取り消す。
+     「1つ戻す」は画面を戻す動作とイベントを消す動作を兼ねており、
+     何回押せば目的の打席に戻るのか分からないため（FR-36 の暫定策） */
+  const rewind = (src) => {
+    setEvents((e) => e.slice(0, src));
+    setRewindTo(null);
+    setMode("pitch"); setDraft(null); setQuestion(null); setNote(""); setMovesErr("");
+    setPlays(0); setTapsThis(0);
   };
 
   const exportJson = () => {
@@ -1116,12 +1127,35 @@ export default function App() {
         </div>
         <div style={{ fontSize: 11, color: C.dim, margin: "4px 0 8px" }}>{backTarget()}</div>
 
-        <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 12px", maxHeight: 130, overflowY: "auto" }}>
+        <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 12px", maxHeight: 190, overflowY: "auto" }}>
           {state.log.length === 0
             ? <div style={{ fontSize: 13, color: C.dim }}>まだ記録がありません。</div>
-            : [...state.log].reverse().map((l, i) => (
-              <div key={i} style={{ fontSize: 13, padding: "3px 0", borderBottom: i === state.log.length - 1 ? "none" : `1px dotted ${C.line}`, color: l.pending ? C.red : C.ink }}>{l.text}</div>
-            ))}
+            : [...state.log].reverse().map((l, i) => {
+              const can = l.src != null;
+              const open = rewindTo === l.src && can;
+              return (
+                <div key={i} style={{ borderBottom: i === state.log.length - 1 ? "none" : `1px dotted ${C.line}` }}>
+                  <div onClick={() => can && setRewindTo(open ? null : l.src)}
+                    style={{ fontSize: 13, padding: "5px 0", color: l.pending ? C.red : C.ink, cursor: can ? "pointer" : "default" }}>
+                    {l.text}
+                  </div>
+                  {open && (
+                    <div style={{ padding: "0 0 8px" }}>
+                      <button onClick={() => rewind(l.src)}
+                        style={{ width: "100%", minHeight: 44, borderRadius: 8, background: C.card, color: C.red, border: `2px solid ${C.red}`, fontSize: 14, fontWeight: 600 }}>
+                        ここから後の{events.length - l.src}件を取り消す
+                      </button>
+                      <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+                        この行を含めて、あとの記録が消えます
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+        </div>
+        <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+          記録の行を押すと、そこまでまとめて戻せます
         </div>
 
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>

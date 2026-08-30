@@ -6,7 +6,7 @@
    端末で扱える文字に置き換えているため、記号は原本と厳密には一致しない。
    ゴロ・フライ・ライナーの補助線（凵／⌐／横線）は ⌄ ⌃ ‾ で代用している。 */
 import fs from "fs";
-import { initialState, applyEvent, batKey, batterId, batterOrder, uniformOf, POS }
+import { initialState, applyEvent, batKey, batterId, batterOrder, uniformOf, POS, defaultFielders }
   from "../src/rules.js";
 
 const PITCH = { "ボール":"●", "見逃し":"○", "空振り":"×", "ファール":"―", "ストライク":"○", "ファウル":"―" };
@@ -83,6 +83,8 @@ for (const e of d.events) {
   if (e.t === "inplay") {
     const c = cell(before, bid, ord);
     c.result = resultMark(e.result, e.zone, e.answer);
+    const f = e.fielders && e.fielders.length ? e.fielders : defaultFielders(e.zone, e.result, e.moves);
+    if (f.length > 1) c.result = c.result.replace(String(e.zone), f.join("-"));
     if (e.note) c.result += ` [${e.note}]`;
     s = applyEvent(before, e);
     continue;

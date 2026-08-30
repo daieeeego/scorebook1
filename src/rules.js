@@ -176,6 +176,21 @@ const BATTER_OUT_ONLY = new Set(["ファールフライ", "インフィールド
 /* 打球ではないため、打球方向を記録しない */
 const NO_ZONE = new Set(["死球", "敬遠四球", "打撃妨害", "走塁妨害", "振り逃げ", "3バント失敗"]);
 
+/** 打球にかかわった守備の順。記法規約 §3 の `6-3` に相当する。
+    内野ゴロで打者がアウトになる形は一塁送球で決まるため、指定がなければ導出する。
+    それ以外（併殺の中継、エラーを挟む `5E-3` など）は指定が要る */
+export function defaultFielders(zone, result, moves) {
+  if (zone == null) return [];
+  const GROUNDER = new Set(["ゴロアウト", "ゴロエラー", "犠牲バント", "野手選択"]);
+  if (!GROUNDER.has(result)) return [zone];
+  const batter = (moves || []).find((m) => m.from === -1);
+  /* 打者が一塁でアウト＝その野手から一塁へ送球。一塁手が自分で踏んだ場合は送球なし */
+  if (batter && batter.to === -1 && zone !== 3) return [zone, 3];
+  return [zone];
+}
+
+export const fieldersText = (f) => (f && f.length > 1 ? f.map((n) => (n === 3 ? "3" : String(n))).join("-") : f && f.length ? String(f[0]) : "");
+
 export const isHitLike = (r) => HIT_LIKE.has(r);
 export const isErrorLike = (r) => ERROR_LIKE.has(r);
 export const needsZone = (r) => !NO_ZONE.has(r);
@@ -241,6 +256,8 @@ export const initialState = (setup) => ({
   pitchCount: {},          // playerId -> 投球数（FR-19）
   pitchHalves: {},         // playerId -> 投球したハーフイニング（投球回）
   halves: {},              // playerId -> ["1表", ...]（FR-21）
+  leftOnBase: {},          // "1裏" -> [playerId]（残塁 ℓ）
+  lobCount: {},            // playerId -> 残塁の回数
   plateAppearances: {},
   log: [],
   seq: 0,
@@ -256,6 +273,8 @@ const cl = (s) => ({
   pitchCount: { ...s.pitchCount },
   pitchHalves: { ...s.pitchHalves },
   halves: { ...s.halves },
+  leftOnBase: { ...s.leftOnBase },
+  lobCount: { ...s.lobCount },
   plateAppearances: { ...s.plateAppearances },
   log: [...s.log],
 });
@@ -284,6 +303,14 @@ function nextBatter(s) {
 }
 
 function endHalf(s) {
+  /* 残塁（記法規約 §8 の ℓ）。塁を空にする前に、残っていた走者を記録する */
+  const left = s.bases.filter(Boolean);
+  if (left.length) {
+    const key = halfKey(s.inning, s.isTop);
+    s.leftOnBase = { ...s.leftOnBase, [key]: left };
+    for (const id of left) s.lobCount = { ...s.lobCount, [id]: (s.lobCount[id] || 0) + 1 };
+    push(s, `${s.inning}回${s.isTop ? "表" : "裏"} 残塁 ${left.length}（${left.map((x) => `#${uniformOf(x)}`).join("・")}）`, { kind: "lob" });
+  }
   s.outs = 0;
   s.bases = [null, null, null];
   s.balls = 0;
@@ -428,7 +455,7 @@ function applySub(s, sub) {
         changed.push(`#${uniformOf(other.playerId)}→守備なし`);
       }
     }
-    if (changed.length) push(s, `${s.setup.teamName[sub.side]} 守備位置変更（${changed.join("、")}）`, { kind: "sub" });
+    if (changed.length) push(s, `${s.setup.teamName[sub.side]} 守備位置変更（${changed.join("、")}）`, { kind: "sub", src: sub._src });
     return;
   }
 
@@ -460,7 +487,7 @@ function applySub(s, sub) {
 
   const from = outgoing ? `#${uniformOf(outgoing.playerId)}` : "空き";
   const at = sub.position == null ? "" : `・${POS[sub.position]}`;
-  push(s, `${s.setup.teamName[sub.side]} ${sub.order}番 ${from}→#${uniformOf(incoming)}（${sub.kind}${at}）`, { kind: "sub" });
+  push(s, `${s.setup.teamName[sub.side]} ${sub.order}番 ${from}→#${uniformOf(incoming)}（${sub.kind}${at}）`, { kind: "sub", src: sub._src });
 }
 
 /* ---------------- 畳み込み本体 ---------------- */
@@ -562,9 +589,10 @@ export function applyEvent(prev, e) {
     /* 走者の行き先が指定されていれば、それを正とする。
        打者結果から進塁を導出する下の分岐は、moves を持たない過去データ用 */
     if (e.moves) {
+      const f = e.fielders && e.fielders.length ? e.fielders : defaultFielders(e.zone, r, e.moves);
       const { scored, out } = applyMoves(s, e.moves, num);
       const outNote = out.length ? ` ${out.map((x) => `#${uniformOf(x)}`).join("・")}アウト` : "";
-      const zoneNote = e.zone == null ? "" : `（${where}）`;
+      const zoneNote = e.zone == null ? "" : `（${where}${f.length > 1 ? ` ${fieldersText(f)}` : ""}）`;
       push(s, `${t} ${r}${zoneNote}${outNote}${runsNote(scored)}${e.note ? " — " + e.note : ""}${mark}`,
         { src, pending: r === "保留" && !e._resolved });
       nextBatter(s);
@@ -879,6 +907,7 @@ export function statsFrom(s) {
           halves: (s.halves[e.playerId] || []).length,
           halfList: s.halves[e.playerId] || [],
           plateAppearances: s.plateAppearances[e.playerId] || 0,
+          leftOnBase: s.lobCount[e.playerId] || 0,
         });
       });
     });
