@@ -4,7 +4,7 @@ import {
   RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, THROW_REASONS,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
   deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
-  defaultMoves, moveOptions, validateMoves,
+  defaultMoves, moveOptions, validateMoves, defaultFielders, fieldersNotation,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
   pitcherId, uniformOf, validateSub, inferSubKind, pid,
 } from "./rules.js";
@@ -602,6 +602,7 @@ export default function App() {
   const [showSheet, setShowSheet] = useState(false);
   const [movesErr, setMovesErr] = useState("");
   const [rewindTo, setRewindTo] = useState(null);   // ログから選んだ巻き戻し先
+  const [seq, setSeq] = useState(null);             // 守備の関与順を手で組むとき
   const fileRef = useRef(null);
 
   /* 1操作ごとに自動保存。試合中に閉じても消えない */
@@ -703,6 +704,19 @@ export default function App() {
     setMode("moves");
   };
 
+  /* 導出では決まらない関与順（併殺の中継、受け手のエラー）を手で組む。
+     初期値は導出結果なので、足りないところだけ触ればよい */
+  const openSeq = () => {
+    tap();
+    setSeq(seq || defaultFielders(draft.zone, draft.result, draft.moves));
+    setMode("fielders");
+  };
+  const seqAdd = (n) => { tap(); setSeq((q) => ({ ...q, f: [...q.f, n] })); };
+  const seqDrop = () => { tap(); setSeq((q) => ({ ...q, f: q.f.slice(0, -1), errorAt: q.errorAt != null && q.errorAt >= q.f.length - 1 ? null : q.errorAt })); };
+  const seqError = (i) => { tap(); setSeq((q) => ({ ...q, errorAt: q.errorAt === i ? null : i, kind: q.errorAt === i ? "" : q.kind })); };
+  const seqKind = (k) => { tap(); setSeq((q) => ({ ...q, kind: q.kind === k ? "" : k })); };
+  const seqDone = () => { tap(); setDraft((d) => ({ ...d, fielders: seq.f, errorAt: seq.errorAt, errorKind: seq.kind })); setMode("moves"); };
+
   const setMove = (from, to) => {
     tap();
     setMovesErr("");
@@ -713,7 +727,10 @@ export default function App() {
     const problem = validateMoves(draft.moves);
     if (problem) { setMovesErr(problem); return; }
     tap();
-    commit({ t: "inplay", zone: draft.zone, result: draft.result, moves: draft.moves });
+    commit({
+      t: "inplay", zone: draft.zone, result: draft.result, moves: draft.moves,
+      ...(draft.fielders ? { fielders: draft.fielders, errorAt: draft.errorAt, errorKind: draft.errorKind } : {}),
+    });
   };
 
   const onAnswer = (a) => { tap(); commit({ t: "inplay", zone: draft ? draft.zone : null, result: draft.result, answer: a }); };
@@ -725,6 +742,7 @@ export default function App() {
       case "result": return "打球方向の選択に戻る";
       case "detail": return "結果の選択に戻る";
       case "moves": return "結果の選択に戻る";
+      case "fielders": return "走者の行き先に戻る";
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
       case "runner-why": return "走者の選択を取り消す";
@@ -758,6 +776,7 @@ export default function App() {
       else if (mode === "no-ball") { setMode("pitch"); setDraft(null); }
       else if (mode === "result") { setMode("zone"); setDraft(null); }
       else if (mode === "detail") setMode("result");
+      else if (mode === "fielders") { setSeq(null); setMode("moves"); }
       else if (mode === "moves") {
         setMovesErr("");
         if (draft.zone == null) setMode("no-ball");
@@ -1081,6 +1100,53 @@ export default function App() {
           </>
         )}
 
+        {mode === "fielders" && (
+          <>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 6 }}>送球の順</div>
+            <div style={{ background: C.card, border: `2px solid ${C.ink}`, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+              <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, letterSpacing: 1 }}>
+                {fieldersNotation(seq) || "—"}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                {seq.f.map((n, i) => (
+                  <button key={i} onClick={() => seqError(i)}
+                    style={{
+                      minHeight: 44, padding: "0 10px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                      background: seq.errorAt === i ? C.red : C.card, color: seq.errorAt === i ? "#fff" : C.sub,
+                      border: `2px solid ${seq.errorAt === i ? C.red : C.line}`,
+                    }}>
+                    {POS[n]}{seq.errorAt === i ? " エラー" : ""}
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
+                野手を押すと、その人のエラーになります
+              </div>
+              {seq.errorAt != null && (
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  {[["T", "高投"], ["⊥", "低投"]].map(([k, l]) => (
+                    <button key={k} onClick={() => seqKind(k)}
+                      style={{
+                        minHeight: 44, padding: "0 12px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                        background: seq.kind === k ? C.ink : C.card, color: seq.kind === k ? "#fff" : C.ink,
+                        border: `2px solid ${seq.kind === k ? C.ink : C.line}`,
+                      }}>{l}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>送球先を押して足す</div>
+            <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.line}`, marginBottom: 10 }}>
+              <FieldPicker onPick={seqAdd} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 8 }}>
+              <SmallBtn tone="warn" onClick={seqDrop}>最後を消す</SmallBtn>
+              <Btn onClick={seqDone}>決定</Btn>
+            </div>
+          </>
+        )}
+
         {mode === "moves" && (
           <>
             <div style={{ fontSize: 15, marginBottom: 2 }}>
@@ -1100,6 +1166,16 @@ export default function App() {
               options={moveOptions(state, -1)}
               value={(draft.moves.find((m) => m.from === -1) || {}).to}
               onPick={(to) => setMove(-1, to)} />
+            {draft.zone != null && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 12px" }}>
+                <span style={{ fontSize: 12, color: C.sub }}>守備</span>
+                <b style={{ fontFamily: MONO, fontSize: 16 }}>
+                  {fieldersNotation(draft.fielders ? { f: draft.fielders, errorAt: draft.errorAt, kind: draft.errorKind }
+                    : defaultFielders(draft.zone, draft.result, draft.moves))}
+                </b>
+                <div style={{ marginLeft: "auto" }}><SmallBtn onClick={openSeq}>直す</SmallBtn></div>
+              </div>
+            )}
             {movesErr && <div style={{ color: C.red, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{movesErr}</div>}
             <Btn onClick={commitMoves}>この内容で記録する</Btn>
           </>
