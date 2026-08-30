@@ -35,6 +35,10 @@ const isFoul = (r) => r === "ファール" || r === "ファウル";
 
 /* k = 保存する名称 / l = 画面表示（記法規約 §7 の語） */
 export const RUNNER_REASONS = [
+  /* 打者の打球で走者がさらに進んだ場合。打席結果は走者の進塁を固定で導出する
+     （単打なら一塁走者は二塁まで等）が、学童では余分に進むことが普通に起きる。
+     打席結果の直後に記録されたものは、その打者の打球によるものとみなす */
+  { k: "打球で進塁", l: "打球で進塁", out: false },
   { k: "盗塁", l: "盗塁", out: false },
   { k: "暴投", l: "ワイルドピッチ", out: false },
   { k: "捕逸", l: "パスボール", out: false },
@@ -57,7 +61,7 @@ export const RUNNER_DETAIL = [
 export const THROW_REASONS = new Set(["盗塁失敗"]);
 
 /* 2つ以上進むことがある理由。盗塁は1つずつなので含めない */
-const MULTI_BASE_REASONS = new Set(["暴投", "捕逸", "けん制の悪送球"]);
+const MULTI_BASE_REASONS = new Set(["打球で進塁", "暴投", "捕逸", "けん制の悪送球"]);
 
 export const RUNNER_DETAIL_KEYS = new Set(RUNNER_DETAIL.map((r) => r.k));
 
@@ -229,6 +233,7 @@ export const initialState = (setup) => ({
   score: { away: 0, home: 0 },
   lineup: { away: cloneLineup(setup.lineup.away), home: cloneLineup(setup.lineup.home) },
   pitchCount: {},          // playerId -> 投球数（FR-19）
+  pitchHalves: {},         // playerId -> 投球したハーフイニング（投球回）
   halves: {},              // playerId -> ["1表", ...]（FR-21）
   plateAppearances: {},
   log: [],
@@ -243,6 +248,7 @@ const cl = (s) => ({
   score: { ...s.score },
   lineup: { away: cloneLineup(s.lineup.away), home: cloneLineup(s.lineup.home) },
   pitchCount: { ...s.pitchCount },
+  pitchHalves: { ...s.pitchHalves },
   halves: { ...s.halves },
   plateAppearances: { ...s.plateAppearances },
   log: [...s.log],
@@ -301,26 +307,41 @@ function countPitch(s) {
   const p = pitcherId(s);
   const key = p || `${fieldKey(s)}#投手未設定`;
   s.pitchCount[key] = (s.pitchCount[key] || 0) + 1;
+  /* 投球回は出場イニング（FR-21）とは別に数える。投手が打席にも立つため、
+     出場イニングを投球回として見せると実際より多くなる */
+  const hk = halfKey(s.inning, s.isTop);
+  const arr = s.pitchHalves[key] || [];
+  if (!arr.includes(hk)) s.pitchHalves[key] = [...arr, hk];
 }
 
+/** 押し出し。生還した走者を返す */
 function forcePush(s, batter) {
   const b = s.bases;
-  if (b[0] == null) b[0] = batter;
-  else if (b[1] == null) { b[1] = b[0]; b[0] = batter; }
-  else if (b[2] == null) { b[2] = b[1]; b[1] = b[0]; b[0] = batter; }
-  else { s.score[batKey(s)] += 1; b[2] = b[1]; b[1] = b[0]; b[0] = batter; }
+  if (b[0] == null) { b[0] = batter; return []; }
+  if (b[1] == null) { b[1] = b[0]; b[0] = batter; return []; }
+  if (b[2] == null) { b[2] = b[1]; b[1] = b[0]; b[0] = batter; return []; }
+  const scored = [b[2]];
+  s.score[batKey(s)] += 1;
+  b[2] = b[1]; b[1] = b[0]; b[0] = batter;
+  return scored;
 }
 
+/** 得点をログに添える文字列 */
+const runsNote = (ids) => (ids.length ? ` ${ids.map((x) => `#${uniformOf(x)}`).join("・")}生還` : "");
+
+/** 全走者を n 塁進める。生還した走者を返す */
 function advanceAll(s, n) {
+  const scored = [];
   for (let i = 2; i >= 0; i--) {
     if (s.bases[i] != null) {
       const to = i + n;
       const runner = s.bases[i];
       s.bases[i] = null;
-      if (to >= 3) s.score[batKey(s)] += 1;
+      if (to >= 3) { s.score[batKey(s)] += 1; scored.push(runner); }
       else s.bases[to] = runner;
     }
   }
+  return scored;
 }
 
 /* ---------------- 交代（FR-09 / FR-17） ---------------- */
@@ -383,11 +404,23 @@ function applySub(s, sub) {
   if (sub.kind === "守備位置変更") {
     const slots = s.lineup[sub.side];
     const changed = [];
+    const moved = new Set();
     for (const m of sub.moves) {
       const e = activeEntry(slots[m.order - 1]);
       if (!e || e.position === m.position) continue;
       e.position = m.position;
+      moved.add(e.playerId);
       changed.push(`#${uniformOf(e.playerId)}→${m.position == null ? "守備なし" : POS[m.position]}`);
+    }
+    /* 同じ守備位置に元からいた選手を外す。二人が同じ位置に立っている状態を残すと、
+       投球数がどちらに付くかが打順の並び順で決まってしまう */
+    for (const m of sub.moves) {
+      if (m.position == null) continue;
+      for (const other of activeEntries(s, sub.side)) {
+        if (moved.has(other.playerId) || other.position !== m.position) continue;
+        other.position = null;
+        changed.push(`#${uniformOf(other.playerId)}→守備なし`);
+      }
     }
     if (changed.length) push(s, `${s.setup.teamName[sub.side]} 守備位置変更（${changed.join("、")}）`, { kind: "sub" });
     return;
@@ -445,9 +478,9 @@ export function applyEvent(prev, e) {
     if (e.r === "ボール") {
       s.balls += 1;
       if (s.balls >= 4) {
-        forcePush(s, num);
+        const scored = forcePush(s, num);
         s.plateAppearances[num] = (s.plateAppearances[num] || 0) + 1;
-        push(s, `${t} 四球`, { src });
+        push(s, `${t} 四球${runsNote(scored)}`, { src });
         nextBatter(s);
       }
       return s;
@@ -477,8 +510,8 @@ export function applyEvent(prev, e) {
     /* 重盗など、複数の走者が同時に動く場合。走者ごとに入力させると
        押し忘れた分だけ盤面がずれるため、1イベントで全員を進める */
     if (e.from === "all") {
-      advanceAll(s, 1);
-      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ${e.reason}（走者が1つ進塁）`, { src });
+      const scored = advanceAll(s, 1);
+      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ${e.reason}（走者が1つ進塁）${runsNote(scored)}`, { src });
       return s;
     }
 
@@ -488,8 +521,8 @@ export function applyEvent(prev, e) {
 
     /* ボークは規約上「ランナー1塁進塁」。選んだ走者だけでなく全員が進む */
     if (e.reason === "ボーク") {
-      advanceAll(s, 1);
-      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ボーク（走者が1つ進塁）`, { src });
+      const scored = advanceAll(s, 1);
+      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ボーク（走者が1つ進塁）${runsNote(scored)}`, { src });
       return s;
     }
 
@@ -520,11 +553,24 @@ export function applyEvent(prev, e) {
     const r = e.result;
     const mark = e._resolved ? "（確定）" : "";
 
+    /* 走者の行き先が指定されていれば、それを正とする。
+       打者結果から進塁を導出する下の分岐は、moves を持たない過去データ用 */
+    if (e.moves) {
+      const { scored, out } = applyMoves(s, e.moves, num);
+      const outNote = out.length ? ` ${out.map((x) => `#${uniformOf(x)}`).join("・")}アウト` : "";
+      const zoneNote = e.zone == null ? "" : `（${where}）`;
+      push(s, `${t} ${r}${zoneNote}${outNote}${runsNote(scored)}${e.note ? " — " + e.note : ""}${mark}`,
+        { src, pending: r === "保留" && !e._resolved });
+      nextBatter(s);
+      if (s.outs >= 3) endHalf(s);
+      return s;
+    }
+
     /* --- 詳細（記法規約 §5／§6 の追加分） --- */
 
     if (PUSH_LIKE.has(r)) {
-      forcePush(s, num);
-      push(s, `${t} ${r}${mark}`, { src });
+      const scored = forcePush(s, num);
+      push(s, `${t} ${r}${runsNote(scored)}${mark}`, { src });
       nextBatter(s);
       return s;
     }
@@ -546,8 +592,8 @@ export function applyEvent(prev, e) {
     }
     if (r === "犠牲バント") {
       s.outs += 1;
-      advanceAll(s, 1);
-      push(s, `${t} 犠牲バント（△${where}）${mark}`, { src });
+      const scored = advanceAll(s, 1);
+      push(s, `${t} 犠牲バント（△${where}）${runsNote(scored)}${mark}`, { src });
       nextBatter(s);
       if (s.outs >= 3) endHalf(s);
       return s;
@@ -561,34 +607,35 @@ export function applyEvent(prev, e) {
     }
 
     if (HR_LIKE.has(r)) {
-      advanceAll(s, 4);
+      const scored = advanceAll(s, 4);
       s.score[batKey(s)] += 1;
-      push(s, `${t} ${r}（${where}方向）${mark}`, { src });
+      push(s, `${t} ${r}（${where}方向）${runsNote([...scored, num])}${mark}`, { src });
       nextBatter(s);
       return s;
     }
     if (HIT_LIKE.has(r) || ERROR_LIKE.has(r)) {
       const bk = batKey(s);
       const [r1, r2, r3] = s.bases;
+      const scored = [];
       s.bases = [null, null, null];
-      if (r3 != null) s.score[bk] += 1;
+      if (r3 != null) { s.score[bk] += 1; scored.push(r3); }
       if (r2 != null) {
-        if (e.answer === "本塁まで進んだ") s.score[bk] += 1;
+        if (e.answer === "本塁まで進んだ") { s.score[bk] += 1; scored.push(r2); }
         else if (e.answer === "二塁に留まった" && r1 == null) s.bases[1] = r2;
         else s.bases[2] = r2;
       }
       if (r1 != null) s.bases[1] = r1;
       s.bases[0] = num;
       const note = e.answer === "二塁に留まった" ? "（二塁走者は動かず）" : "";
-      push(s, `${t} ${r}（${where}）${note}${mark}`, { src });
+      push(s, `${t} ${r}（${where}）${note}${runsNote(scored)}${mark}`, { src });
       nextBatter(s);
       return s;
     }
     if (r === "二塁打" || r === "三塁打") {
       const n = r === "二塁打" ? 2 : 3;
-      advanceAll(s, n);
+      const scored = advanceAll(s, n);
       s.bases[n - 1] = num;
-      push(s, `${t} ${r}（${where}）${mark}`, { src });
+      push(s, `${t} ${r}（${where}）${runsNote(scored)}${mark}`, { src });
       nextBatter(s);
       return s;
     }
@@ -608,13 +655,15 @@ export function applyEvent(prev, e) {
         s.bases[0] = null;
         push(s, `${t} ダブルプレー（${where}）${mark}`, { src });
       } else if (e.answer === "フォースアウト（二塁）" || e.answer === "二塁でアウト") {
+        /* 記法規約 §7: ランナーが FO の場合、打者欄にはゴロ記入のみ。
+           打者は出塁するがヒットではなく、野手選択（オールセーフ）でもない */
         s.outs += 1;
         s.bases[0] = num;
-        push(s, `${t} 野手選択（${where}）${mark}`, { src });
+        push(s, `${t} ${r}（${where}）／一塁走者フォースアウト（二塁）・打者は一塁${mark}`, { src });
       } else if (e.answer === "二塁へ進んだ") {
         s.outs += 1;
-        advanceAll(s, 1);
-        push(s, `${t} ${r}（${where}）走者進塁${mark}`, { src });
+        const scored = advanceAll(s, 1);
+        push(s, `${t} ${r}（${where}）走者進塁${runsNote(scored)}${mark}`, { src });
       } else {
         s.outs += 1;
         push(s, `${t} ${r}（${where}）${mark}`, { src });
@@ -680,6 +729,103 @@ export function questionFor(state, zone, result) {
   return null;
 }
 
+/* ---------------- 打球1つに対する走者の行き先 ----------------
+   手書きのスコアブックは、打球の記号（打者結果）とは別に、走者ごとの
+   行き先をダイヤ図の線で書く。打者結果から進塁を固定で導出していると
+   紙と同じ記録にならないため、行き先を moves として持つ。
+
+   from: -1 = 打者 / 0,1,2 = 塁
+   to:   -1 = アウト / 0,1,2 = 塁 / 3 = 本塁 */
+
+/** その打席結果でふつう起きる行き先。画面の初期値に使う */
+export function defaultMoves(s, result) {
+  const b = s.bases;
+  const mv = [];
+  const on = [2, 1, 0].filter((i) => b[i] != null);   // 先の塁から
+  const hold = () => on.forEach((i) => mv.push({ from: i, to: i }));
+
+  if (HR_LIKE.has(result)) { on.forEach((i) => mv.push({ from: i, to: 3 })); mv.push({ from: -1, to: 3 }); return mv; }
+  if (result === "三塁打") { on.forEach((i) => mv.push({ from: i, to: 3 })); mv.push({ from: -1, to: 2 }); return mv; }
+  if (result === "二塁打") { on.forEach((i) => mv.push({ from: i, to: Math.min(i + 2, 3) })); mv.push({ from: -1, to: 1 }); return mv; }
+  if (HIT_LIKE.has(result) || ERROR_LIKE.has(result)) {
+    on.forEach((i) => mv.push({ from: i, to: Math.min(i + 1, 3) }));
+    mv.push({ from: -1, to: 0 }); return mv;
+  }
+  if (result === "保留") { hold(); mv.push({ from: -1, to: 0 }); return mv; }
+  if (PUSH_LIKE.has(result)) {
+    let j = 0;
+    while (j <= 2 && b[j] != null) { mv.push({ from: j, to: j + 1 }); j++; }
+    for (let i = j; i <= 2; i++) if (b[i] != null) mv.push({ from: i, to: i });
+    mv.push({ from: -1, to: 0 }); return mv;
+  }
+  if (result === "野手選択") {
+    const lead = b[0] != null ? 0 : b[1] != null ? 1 : b[2] != null ? 2 : -1;
+    on.forEach((i) => mv.push({ from: i, to: i === lead ? -1 : i }));
+    mv.push({ from: -1, to: 0 }); return mv;
+  }
+  if (result === "犠牲フライ") { on.forEach((i) => mv.push({ from: i, to: i === 2 ? 3 : i })); mv.push({ from: -1, to: -1 }); return mv; }
+  if (result === "犠牲バント") { on.forEach((i) => mv.push({ from: i, to: Math.min(i + 1, 3) })); mv.push({ from: -1, to: -1 }); return mv; }
+  if (result === "トリプルプレー") {
+    on.forEach((i, k) => mv.push({ from: i, to: k < 2 ? -1 : i }));
+    mv.push({ from: -1, to: -1 }); return mv;
+  }
+  hold(); mv.push({ from: -1, to: -1 }); return mv;      // ゴロ・フライ・ライナーなど
+}
+
+/** その走者が選べる行き先。塁の重複と逆走を作らせない（§7.1 第1層） */
+export function moveOptions(s, from) {
+  const opts = [];
+  if (from === -1) {
+    opts.push({ to: -1, label: "アウト" });
+    for (let t = 0; t <= 3; t++) opts.push({ to: t, label: t === 3 ? "本塁（得点）" : `${BASE[t]}` });
+    return opts;
+  }
+  opts.push({ to: from, label: "留まる" });
+  for (let t = from + 1; t <= 3; t++) opts.push({ to: t, label: t === 3 ? "本塁（得点）" : `${BASE[t]}まで` });
+  opts.push({ to: -1, label: "アウト" });
+  return opts;
+}
+
+/** moves に矛盾がないか。問題なければ null */
+export function validateMoves(moves) {
+  const used = new Map();
+  for (const m of moves) {
+    if (m.to < 0 || m.to > 2) continue;
+    if (used.has(m.to)) return `${BASE[m.to]}に2人置くことはできません`;
+    used.set(m.to, m.from);
+  }
+  return null;
+}
+
+/** moves を盤面に適用する。生還した走者とアウトになった走者を返す */
+function applyMoves(s, moves, batter) {
+  const before = [...s.bases];
+  const scored = [];
+  const out = [];
+  s.bases = [null, null, null];
+  for (const m of moves) {
+    const pid = m.from === -1 ? batter : before[m.from];
+    if (pid == null) continue;
+    if (m.to === -1) { s.outs += 1; out.push(pid); continue; }
+    if (m.to >= 3) { s.score[batKey(s)] += 1; scored.push(pid); continue; }
+    s.bases[m.to] = pid;
+  }
+  return { scored, out };
+}
+
+/** 直前が打席結果で、間に投球が無ければ、その走者の動きはその打者の打球によるもの。
+    記法規約 §7 の `(4)`（4番バッター時ランナー進塁）を導出するために使う */
+export function attributedBatter(events, index) {
+  for (let i = index - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.t === "runner") continue;
+    if (e.t === "sub") continue;
+    if (e.t === "inplay") return i;
+    return null;                    // 投球を挟んでいれば、その打者のものではない
+  }
+  return null;
+}
+
 /** 走者が2つ以上進み得る場面だけ、どこまで進んだかを問う。
     暴投を2回入力させると投手成績の暴投数が二重に計上されるため */
 export function runnerQuestionFor(state, from, reason) {
@@ -708,7 +854,8 @@ export function statsFrom(s) {
       side: sideOf(playerId),
       uniformNumber: uniformOf(playerId),
       pitches,
-      halves: (s.halves[playerId] || []).length,
+      halves: (s.pitchHalves[playerId] || []).length,   // 投球回
+      onField: (s.halves[playerId] || []).length,       // 出場イニング
     }))
     .sort((a, b) => b.pitches - a.pitches);
 
