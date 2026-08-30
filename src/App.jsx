@@ -384,6 +384,9 @@ function StatsTab({ state }) {
   return (
     <>
       <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>投手別 投球数</div>
+      <div style={{ fontSize: 11, color: C.dim, marginBottom: 4 }}>
+        学童の上限は1試合かつ1日70球（4年生以下は60球）
+      </div>
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, marginBottom: 16 }}>
         {stats.pitchers.length === 0
           ? <div style={{ padding: 10, fontSize: 13, color: C.dim }}>まだ投球がありません。</div>
@@ -391,7 +394,7 @@ function StatsTab({ state }) {
             <div key={p.playerId} style={row}>
               <b style={{ fontFamily: MONO }}>#{p.uniformNumber}</b>
               <span style={{ fontSize: 12, color: C.sub }}>{state.setup.teamName[p.side]}</span>
-              <span style={{ fontSize: 12, color: C.sub }}>{p.halves}イニング</span>
+              <span style={{ fontSize: 12, color: C.sub }}>投球回 {p.halves}</span>
               <b style={{ fontFamily: MONO, fontSize: 18 }}>{p.pitches}球</b>
             </div>
           ))}

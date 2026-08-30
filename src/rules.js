@@ -229,6 +229,7 @@ export const initialState = (setup) => ({
   score: { away: 0, home: 0 },
   lineup: { away: cloneLineup(setup.lineup.away), home: cloneLineup(setup.lineup.home) },
   pitchCount: {},          // playerId -> 投球数（FR-19）
+  pitchHalves: {},         // playerId -> 投球したハーフイニング（投球回）
   halves: {},              // playerId -> ["1表", ...]（FR-21）
   plateAppearances: {},
   log: [],
@@ -243,6 +244,7 @@ const cl = (s) => ({
   score: { ...s.score },
   lineup: { away: cloneLineup(s.lineup.away), home: cloneLineup(s.lineup.home) },
   pitchCount: { ...s.pitchCount },
+  pitchHalves: { ...s.pitchHalves },
   halves: { ...s.halves },
   plateAppearances: { ...s.plateAppearances },
   log: [...s.log],
@@ -301,26 +303,41 @@ function countPitch(s) {
   const p = pitcherId(s);
   const key = p || `${fieldKey(s)}#投手未設定`;
   s.pitchCount[key] = (s.pitchCount[key] || 0) + 1;
+  /* 投球回は出場イニング（FR-21）とは別に数える。投手が打席にも立つため、
+     出場イニングを投球回として見せると実際より多くなる */
+  const hk = halfKey(s.inning, s.isTop);
+  const arr = s.pitchHalves[key] || [];
+  if (!arr.includes(hk)) s.pitchHalves[key] = [...arr, hk];
 }
 
+/** 押し出し。生還した走者を返す */
 function forcePush(s, batter) {
   const b = s.bases;
-  if (b[0] == null) b[0] = batter;
-  else if (b[1] == null) { b[1] = b[0]; b[0] = batter; }
-  else if (b[2] == null) { b[2] = b[1]; b[1] = b[0]; b[0] = batter; }
-  else { s.score[batKey(s)] += 1; b[2] = b[1]; b[1] = b[0]; b[0] = batter; }
+  if (b[0] == null) { b[0] = batter; return []; }
+  if (b[1] == null) { b[1] = b[0]; b[0] = batter; return []; }
+  if (b[2] == null) { b[2] = b[1]; b[1] = b[0]; b[0] = batter; return []; }
+  const scored = [b[2]];
+  s.score[batKey(s)] += 1;
+  b[2] = b[1]; b[1] = b[0]; b[0] = batter;
+  return scored;
 }
 
+/** 得点をログに添える文字列 */
+const runsNote = (ids) => (ids.length ? ` ${ids.map((x) => `#${uniformOf(x)}`).join("・")}生還` : "");
+
+/** 全走者を n 塁進める。生還した走者を返す */
 function advanceAll(s, n) {
+  const scored = [];
   for (let i = 2; i >= 0; i--) {
     if (s.bases[i] != null) {
       const to = i + n;
       const runner = s.bases[i];
       s.bases[i] = null;
-      if (to >= 3) s.score[batKey(s)] += 1;
+      if (to >= 3) { s.score[batKey(s)] += 1; scored.push(runner); }
       else s.bases[to] = runner;
     }
   }
+  return scored;
 }
 
 /* ---------------- 交代（FR-09 / FR-17） ---------------- */
@@ -383,11 +400,23 @@ function applySub(s, sub) {
   if (sub.kind === "守備位置変更") {
     const slots = s.lineup[sub.side];
     const changed = [];
+    const moved = new Set();
     for (const m of sub.moves) {
       const e = activeEntry(slots[m.order - 1]);
       if (!e || e.position === m.position) continue;
       e.position = m.position;
+      moved.add(e.playerId);
       changed.push(`#${uniformOf(e.playerId)}→${m.position == null ? "守備なし" : POS[m.position]}`);
+    }
+    /* 同じ守備位置に元からいた選手を外す。二人が同じ位置に立っている状態を残すと、
+       投球数がどちらに付くかが打順の並び順で決まってしまう */
+    for (const m of sub.moves) {
+      if (m.position == null) continue;
+      for (const other of activeEntries(s, sub.side)) {
+        if (moved.has(other.playerId) || other.position !== m.position) continue;
+        other.position = null;
+        changed.push(`#${uniformOf(other.playerId)}→守備なし`);
+      }
     }
     if (changed.length) push(s, `${s.setup.teamName[sub.side]} 守備位置変更（${changed.join("、")}）`, { kind: "sub" });
     return;
@@ -445,9 +474,9 @@ export function applyEvent(prev, e) {
     if (e.r === "ボール") {
       s.balls += 1;
       if (s.balls >= 4) {
-        forcePush(s, num);
+        const scored = forcePush(s, num);
         s.plateAppearances[num] = (s.plateAppearances[num] || 0) + 1;
-        push(s, `${t} 四球`, { src });
+        push(s, `${t} 四球${runsNote(scored)}`, { src });
         nextBatter(s);
       }
       return s;
@@ -477,8 +506,8 @@ export function applyEvent(prev, e) {
     /* 重盗など、複数の走者が同時に動く場合。走者ごとに入力させると
        押し忘れた分だけ盤面がずれるため、1イベントで全員を進める */
     if (e.from === "all") {
-      advanceAll(s, 1);
-      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ${e.reason}（走者が1つ進塁）`, { src });
+      const scored = advanceAll(s, 1);
+      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ${e.reason}（走者が1つ進塁）${runsNote(scored)}`, { src });
       return s;
     }
 
@@ -488,8 +517,8 @@ export function applyEvent(prev, e) {
 
     /* ボークは規約上「ランナー1塁進塁」。選んだ走者だけでなく全員が進む */
     if (e.reason === "ボーク") {
-      advanceAll(s, 1);
-      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ボーク（走者が1つ進塁）`, { src });
+      const scored = advanceAll(s, 1);
+      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ボーク（走者が1つ進塁）${runsNote(scored)}`, { src });
       return s;
     }
 
@@ -523,8 +552,8 @@ export function applyEvent(prev, e) {
     /* --- 詳細（記法規約 §5／§6 の追加分） --- */
 
     if (PUSH_LIKE.has(r)) {
-      forcePush(s, num);
-      push(s, `${t} ${r}${mark}`, { src });
+      const scored = forcePush(s, num);
+      push(s, `${t} ${r}${runsNote(scored)}${mark}`, { src });
       nextBatter(s);
       return s;
     }
@@ -546,8 +575,8 @@ export function applyEvent(prev, e) {
     }
     if (r === "犠牲バント") {
       s.outs += 1;
-      advanceAll(s, 1);
-      push(s, `${t} 犠牲バント（△${where}）${mark}`, { src });
+      const scored = advanceAll(s, 1);
+      push(s, `${t} 犠牲バント（△${where}）${runsNote(scored)}${mark}`, { src });
       nextBatter(s);
       if (s.outs >= 3) endHalf(s);
       return s;
@@ -561,34 +590,35 @@ export function applyEvent(prev, e) {
     }
 
     if (HR_LIKE.has(r)) {
-      advanceAll(s, 4);
+      const scored = advanceAll(s, 4);
       s.score[batKey(s)] += 1;
-      push(s, `${t} ${r}（${where}方向）${mark}`, { src });
+      push(s, `${t} ${r}（${where}方向）${runsNote([...scored, num])}${mark}`, { src });
       nextBatter(s);
       return s;
     }
     if (HIT_LIKE.has(r) || ERROR_LIKE.has(r)) {
       const bk = batKey(s);
       const [r1, r2, r3] = s.bases;
+      const scored = [];
       s.bases = [null, null, null];
-      if (r3 != null) s.score[bk] += 1;
+      if (r3 != null) { s.score[bk] += 1; scored.push(r3); }
       if (r2 != null) {
-        if (e.answer === "本塁まで進んだ") s.score[bk] += 1;
+        if (e.answer === "本塁まで進んだ") { s.score[bk] += 1; scored.push(r2); }
         else if (e.answer === "二塁に留まった" && r1 == null) s.bases[1] = r2;
         else s.bases[2] = r2;
       }
       if (r1 != null) s.bases[1] = r1;
       s.bases[0] = num;
       const note = e.answer === "二塁に留まった" ? "（二塁走者は動かず）" : "";
-      push(s, `${t} ${r}（${where}）${note}${mark}`, { src });
+      push(s, `${t} ${r}（${where}）${note}${runsNote(scored)}${mark}`, { src });
       nextBatter(s);
       return s;
     }
     if (r === "二塁打" || r === "三塁打") {
       const n = r === "二塁打" ? 2 : 3;
-      advanceAll(s, n);
+      const scored = advanceAll(s, n);
       s.bases[n - 1] = num;
-      push(s, `${t} ${r}（${where}）${mark}`, { src });
+      push(s, `${t} ${r}（${where}）${runsNote(scored)}${mark}`, { src });
       nextBatter(s);
       return s;
     }
@@ -608,13 +638,15 @@ export function applyEvent(prev, e) {
         s.bases[0] = null;
         push(s, `${t} ダブルプレー（${where}）${mark}`, { src });
       } else if (e.answer === "フォースアウト（二塁）" || e.answer === "二塁でアウト") {
+        /* 記法規約 §7: ランナーが FO の場合、打者欄にはゴロ記入のみ。
+           打者は出塁するがヒットではなく、野手選択（オールセーフ）でもない */
         s.outs += 1;
         s.bases[0] = num;
-        push(s, `${t} 野手選択（${where}）${mark}`, { src });
+        push(s, `${t} ${r}（${where}）／一塁走者フォースアウト（二塁）・打者は一塁${mark}`, { src });
       } else if (e.answer === "二塁へ進んだ") {
         s.outs += 1;
-        advanceAll(s, 1);
-        push(s, `${t} ${r}（${where}）走者進塁${mark}`, { src });
+        const scored = advanceAll(s, 1);
+        push(s, `${t} ${r}（${where}）走者進塁${runsNote(scored)}${mark}`, { src });
       } else {
         s.outs += 1;
         push(s, `${t} ${r}（${where}）${mark}`, { src });
@@ -708,7 +740,8 @@ export function statsFrom(s) {
       side: sideOf(playerId),
       uniformNumber: uniformOf(playerId),
       pitches,
-      halves: (s.halves[playerId] || []).length,
+      halves: (s.pitchHalves[playerId] || []).length,   // 投球回
+      onField: (s.halves[playerId] || []).length,       // 出場イニング
     }))
     .sort((a, b) => b.pitches - a.pitches);
 
