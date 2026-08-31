@@ -937,6 +937,130 @@ export function statsFrom(s) {
 
 export const deriveStats = (events, setup) => statsFrom(deriveState(events, setup));
 
+/* ---------------- スコアブックの組み立て ----------------
+   紙のスコアブックは「打順 × イニング」のマス目で、1マスに
+   投球結果・打者結果・走者の動き・アウトカウント・得点が入る。
+   イベント列から、そのマスの中身を組み立てる（記法規約 §1） */
+
+const PITCH_MARK = { "ボール": "●", "見逃し": "○", "空振り": "×", "ファール": "―", "ストライク": "○", "ファウル": "―" };
+const OUT_MARK = ["", "I", "II", "III"];
+const RUNNER_MARK = {
+  "打球で進塁": "→", "盗塁": "S", "暴投": "WP", "捕逸": "PS", "けん制の悪送球": "けん制E",
+  "盗塁失敗": "TO", "けん制でアウト": "けん制TO", "ボーク": "BK", "タッチアウト": "TO",
+  "守備妨害": "IP", "走塁妨害": "OB", "フォースアウト": "FO",
+};
+const RESULT_MARK = {
+  "本塁打": "HR", "ランニングホームラン": "R.H", "バントヒット": "B", "テキサスヒット": "T",
+  "野手選択": "FC", "犠牲フライ": "△", "犠牲バント": "△", "ファールフライ": "F",
+  "インフィールドフライ": "FF", "トリプルプレー": "TP", "3バント失敗": "K³",
+  "死球": "DB", "敬遠四球": "B'", "振り逃げ": "Ϗ", "打撃妨害": "IF", "走塁妨害": "OB",
+  "保留": "⚠",
+};
+
+const GROUND = new Set(["ゴロアウト", "ゴロエラー", "犠牲バント", "野手選択", "悪送球（高投）", "悪送球（低投）"]);
+const FLY = new Set(["フライアウト", "フライエラー", "犠牲フライ", "ファールフライ", "インフィールドフライ"]);
+
+/** 打球の性質。記法規約 §4 の補助線に対応する */
+export function battedKind(result) {
+  if (GROUND.has(result)) return "ground";
+  if (FLY.has(result)) return "fly";
+  if (result === "ライナーアウト") return "liner";
+  return "";
+}
+
+/** 1マスぶんの記号を作る */
+function resultMark(e) {
+  const seq = fieldersNotation(fieldersOf(e));
+  const pre = RESULT_MARK[e.result] || "";
+  if (e.zone == null) return pre || e.result;
+  if (e.result === "二塁打") return `${seq} 2B`;
+  if (e.result === "三塁打") return `${seq} 3B`;
+  if (HR_LIKE.has(e.result)) return `${pre} ${seq}`;
+  if (pre && (e.result === "犠牲フライ" || e.result === "犠牲バント")) return `${pre}${seq}`;
+  if (pre) return `${pre} ${seq}`;
+  if (ERROR_LIKE.has(e.result)) return seq;              // 5E-3 などは既に E を含む
+  if (HIT_LIKE.has(e.result)) return seq;
+  return seq;
+}
+
+/** 打順 × イニングのマス目を組み立てる。印刷と照合に使う */
+export function scoreSheet(events, setup) {
+  const list = resolvedEvents(events);
+  let s = initialState(setup);
+  const cells = new Map();                                  // "side|order|inning" -> マス
+  const key = (side, order, inning) => `${side}|${order}|${inning}`;
+  const cellFor = (st, side, order) => {
+    const k = key(side, order, st.inning);
+    if (!cells.has(k)) {
+      cells.set(k, { side, order, inning: st.inning, num: "", pitches: [], result: "", kind: "", runner: [], outs: "", scored: false });
+    }
+    return cells.get(k);
+  };
+  let maxInning = 1;
+
+  list.forEach((e, i) => {
+    const before = s;
+    maxInning = Math.max(maxInning, before.inning);
+    const side = batKey(before);
+    const order = batterOrder(before);
+    const bid = batterId(before);
+
+    if (e.t === "pitch") {
+      const c = cellFor(before, side, order);
+      c.num = uniformOf(bid);
+      c.pitches.push(PITCH_MARK[e.r] || e.r);
+    } else if (e.t === "inplay") {
+      const c = cellFor(before, side, order);
+      c.num = uniformOf(bid);
+      c.result = resultMark(e);
+      c.kind = battedKind(e.result);
+      if (e.note) c.result += `[${e.note}]`;
+    } else if (e.t === "runner" && e.from !== "all") {
+      const rid = before.bases[e.from];
+      if (rid) {
+        /* 走者の記録は、その走者が出塁したマスへ入れる（記法規約 §1） */
+        let target = null;
+        for (const [, c] of [...cells].reverse()) if (c.num === uniformOf(rid) && c.side === side) { target = c; break; }
+        const mark = RUNNER_MARK[e.reason] || e.reason;
+        const via = e.fielders && e.fielders.length ? e.fielders.join("-") : "";
+        (target || cellFor(before, side, order)).runner.push(via ? `${via}${mark}` : mark);
+      }
+    }
+
+    const after = applyEvent(before, e);
+
+    /* 投球で決着した打席（四球・三振）もマスに入れる */
+    if (e.t === "pitch" && after.log.length > before.log.length) {
+      const line = after.log[after.log.length - 1].text;
+      const c = cellFor(before, side, order);
+      if (line.includes("四球")) c.result = "H";
+      else if (line.includes("K 見逃し三振")) c.result = "K";
+      else if (line.includes("SO 空振り三振")) c.result = "SO";
+      else if (line.includes("三振")) c.result = "K";
+    }
+
+    /* アウトカウントは変化した瞬間のマスへ記す。3アウトでイニングが
+       終わると after.outs は 0 に戻るため、締めた回数で判定する */
+    const halfEnded = after.isTop !== before.isTop || after.inning !== before.inning;
+    const outsNow = halfEnded ? 3 : after.outs;
+    if (outsNow > before.outs && e.t !== "sub") {
+      const c = cellFor(before, side, order);
+      c.outs = OUT_MARK[Math.min(outsNow, 3)] || c.outs;
+    }
+    if (after.score[side] > before.score[side]) {
+      const runs = after.score[side] - before.score[side];
+      const line = after.log[after.log.length - 1];
+      const nums = (line && line.text.match(/#([^\s・]+)(?=[・]|生還)/g) || []).map((x) => x.replace("#", ""));
+      for (const n of nums.slice(0, runs)) {
+        for (const [, c] of [...cells].reverse()) if (c.num === n && c.side === side && !c.scored) { c.scored = true; break; }
+      }
+    }
+    s = after;
+  });
+
+  return { cells, maxInning: Math.max(maxInning, s.inning), state: s };
+}
+
 /* ---------------- 保存データの移行 ---------------- */
 
 const isSlotShape = (d) =>
@@ -961,6 +1085,14 @@ export const swapSides = (setup) => ({
   },
   ownSide: setup.ownSide === "away" ? "home" : "away",
 });
+
+/** 試合の開始・終了時刻。紙のスコアブックに開始/終了の欄があるため記録する。
+    開始は最初のイベントが入った時刻、終了は「試合終了」を押した時刻 */
+export const HHMM = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
 
 /** 自チームの側。指定がなければ後攻（従来の既定） */
 export const ownSideOf = (setup) => setup.ownSide || "home";

@@ -3,7 +3,7 @@ import {
   POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS,
   RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, THROW_REASONS,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
-  swapSides, ownSideOf, oppSideOf,
+  swapSides, ownSideOf, oppSideOf, HHMM, scoreSheet,
   deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
   defaultMoves, moveOptions, validateMoves, defaultFielders, fieldersNotation,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
@@ -607,6 +607,99 @@ function Sheet({ state, events, setup, onClose, onCommit }) {
   );
 }
 
+/* ---------------- スコアブック ----------------
+   打順 × イニングのマス目。紙の様式そのものではないが、記法規約の記号で
+   1打席ずつ読める形にして、印刷（ブラウザのA4印刷）まで通す */
+
+function Cell({ c }) {
+  if (!c) return <td style={{ border: `1px solid ${C.line}`, padding: 2, minWidth: 62 }} />;
+  const bar = c.kind === "ground" ? { borderBottom: `2px solid ${C.ink}` }
+    : c.kind === "fly" ? { borderTop: `2px solid ${C.ink}` }
+    : c.kind === "liner" ? { borderTop: `2px solid ${C.ink}` } : {};
+  return (
+    <td style={{ border: `1px solid ${C.line}`, padding: "2px 3px", minWidth: 62, verticalAlign: "top" }}>
+      <div style={{ display: "flex", gap: 3 }}>
+        <div style={{ fontSize: 8, color: C.sub, lineHeight: 1.15, width: 12, wordBreak: "break-all" }}>
+          {c.pitches.join("")}
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 3 }}>
+            <b style={{ fontFamily: MONO, fontSize: 11 }}>{c.outs}</b>
+            <span style={{ fontFamily: MONO, fontSize: 12, ...bar }}>{c.result}</span>
+            {c.scored && <span style={{ color: C.red, fontSize: 11 }}>●</span>}
+          </div>
+          {c.runner.length > 0 && (
+            <div style={{ fontSize: 9, color: C.sub }}>{c.runner.join(" ")}</div>
+          )}
+        </div>
+      </div>
+    </td>
+  );
+}
+
+function ScoreSheet({ setup, events, onClose }) {
+  const { cells, maxInning } = useMemo(() => scoreSheet(events, setup), [events, setup]);
+  const innings = Array.from({ length: Math.max(maxInning, 7) }, (_, i) => i + 1);
+  const own = ownSideOf(setup);
+  const sides = [own, oppSideOf(setup)];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#fff", zIndex: 60, overflow: "auto" }}>
+      <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 12px", background: C.ink, color: "#fff", position: "sticky", top: 0 }}>
+        <div style={{ flex: 1, fontSize: 16, fontWeight: 700 }}>スコアブック</div>
+        <button onClick={() => window.print()} style={{ minHeight: 44, padding: "0 14px", borderRadius: 8, background: "#fff", border: "none", color: C.ink, fontSize: 15, fontWeight: 700 }}>印刷</button>
+        <button onClick={onClose} style={{ minHeight: 44, padding: "0 14px", borderRadius: 8, background: "transparent", border: "2px solid #fff", color: "#fff", fontSize: 15 }}>閉じる</button>
+      </div>
+
+      <div style={{ padding: 12, color: C.ink }}>
+        <div style={{ fontSize: 13, marginBottom: 2 }}>
+          {setup.date}　{setup.venue || "球場未記入"}
+        </div>
+        <div style={{ fontSize: 13, marginBottom: 10 }}>
+          開始 {HHMM(setup.startedAt) || "—"}　終了 {HHMM(setup.endedAt) || "—"}
+        </div>
+
+        {sides.map((side) => (
+          <div key={side} style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
+              {setup.teamName[side]}{side === own ? "（自チーム）" : ""}
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <th style={{ border: `1px solid ${C.line}`, padding: "2px 4px", fontSize: 11 }}>打順</th>
+                    {innings.map((i) => (
+                      <th key={i} style={{ border: `1px solid ${C.line}`, padding: "2px 4px", fontSize: 11 }}>{i}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((o) => (
+                    <tr key={o}>
+                      <th style={{ border: `1px solid ${C.line}`, padding: "2px 4px", fontSize: 11, whiteSpace: "nowrap" }}>
+                        {o}　#{uniformOf(activeEntry(setup.lineup[side][o - 1]).playerId)}
+                      </th>
+                      {innings.map((i) => <Cell key={i} c={cells.get(`${side}|${o}|${i}`)} />)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+
+        <div style={{ fontSize: 11, color: C.sub, lineHeight: 1.7 }}>
+          左の細い列が投球（●ボール ○見逃し ×空振り ―ファール）。
+          数字の下線がゴロ、上線がフライ・ライナー。●は得点、I／II／IIIはアウトカウント。
+          <br />
+          <b>紙の様式そのものではありません。</b>実寸の再現は未着手です（要件定義 OPEN-02）。
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- 本体 ---------------- */
 
 export default function App() {
@@ -627,6 +720,7 @@ export default function App() {
   const [movesErr, setMovesErr] = useState("");
   const [rewindTo, setRewindTo] = useState(null);   // ログから選んだ巻き戻し先
   const [seq, setSeq] = useState(null);             // 守備の関与順を手で組むとき
+  const [showSheetPaper, setShowSheetPaper] = useState(false);
   const fileRef = useRef(null);
 
   /* 1操作ごとに自動保存。試合中に閉じても消えない */
@@ -671,7 +765,12 @@ export default function App() {
 
   const tap = () => { setTaps((t) => t + 1); setTapsThis((t) => t + 1); };
 
+  const stampStart = () => {
+    if (!setup.startedAt) setSetup((s0) => ({ ...s0, startedAt: new Date().toISOString() }));
+  };
+
   const commit = (ev) => {
+    stampStart();
     setEvents((e) => [...e, ev]);
     setPlays((p) => p + 1);
     setTapsThis(0);
@@ -681,10 +780,11 @@ export default function App() {
   };
 
   /* ベンチ操作（交代・保留の確定）はプレー入力ではないため計測に含めない */
-  const commitBench = (ev) => setEvents((e) => [...e, ev]);
+  const commitBench = (ev) => { stampStart(); setEvents((e) => [...e, ev]); };
 
   const onPitch = (r) => {
     tap();
+    stampStart();
     setEvents((e) => [...e, { t: "pitch", r }]);
     setPlays((p) => p + 1);
     setTapsThis(0);
@@ -917,6 +1017,9 @@ export default function App() {
       {showSheet && (
         <Sheet state={state} events={events} setup={setup}
           onClose={() => setShowSheet(false)} onCommit={commitBench} />
+      )}
+      {showSheetPaper && (
+        <ScoreSheet setup={setup} events={events} onClose={() => setShowSheetPaper(false)} />
       )}
 
       {/* 計測ヘッダ */}
@@ -1299,6 +1402,23 @@ export default function App() {
         </div>
         <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) importJson(f); e.target.value = ""; }} />
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+          <Btn tone="ghost" onClick={() => setShowSheetPaper(true)}>スコアブック</Btn>
+          <Btn tone={setup.endedAt ? "ghost" : "warn"}
+            onClick={() => {
+              if (setup.endedAt) { setSetup({ ...setup, endedAt: null }); setNotice("試合終了を取り消しました。"); return; }
+              setSetup({ ...setup, endedAt: new Date().toISOString() });
+              setNotice("試合終了として記録しました。");
+              setShowSheetPaper(true);
+            }}>
+            {setup.endedAt ? `終了 ${HHMM(setup.endedAt)}` : "試合終了"}
+          </Btn>
+        </div>
+        <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+          開始 {HHMM(setup.startedAt) || "—"}
+          {setup.endedAt ? `／終了 ${HHMM(setup.endedAt)}` : "／試合終了を押すと終了時刻を記録します"}
+        </div>
         <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
           イベント {events.length} 件 ／ 自動保存済み。閉じても続きから再開できます
         </div>
