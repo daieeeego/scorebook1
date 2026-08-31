@@ -864,13 +864,39 @@ export default function App() {
     setPlays(0); setTapsThis(0);
   };
 
-  const exportJson = () => {
-    const blob = new Blob([JSON.stringify({ setup, events }, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `score_${setup.date}_${setup.teamName[ownSideOf(setup)]}_vs_${setup.teamName[oppSideOf(setup)]}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+  /* iOS Safari は blob の download 属性を無視してタブで開いてしまうため、
+     共有シートがあればそちらを優先する。保存もLINE送信もそこからできる。
+     従来は a を DOM に入れずに click し、直後に revokeObjectURL していたため、
+     ダウンロードが始まる前に blob が破棄されることもあった */
+  const exportJson = async () => {
+    const name = `score_${setup.date}_${setup.teamName[ownSideOf(setup)]}_vs_${setup.teamName[oppSideOf(setup)]}.json`;
+    const text = JSON.stringify({ setup, events }, null, 2);
+
+    try {
+      const file = new File([text], name, { type: "application/json" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: name });
+        setNotice("書き出しました。");
+        return;
+      }
+    } catch (err) {
+      if (err && err.name === "AbortError") return;   // 利用者が共有をやめた
+    }
+
+    try {
+      const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setNotice("書き出しました。保存先はブラウザのダウンロードを確認してください。");
+    } catch {
+      setNotice("書き出せませんでした。記録は端末に残っています。");
+    }
   };
 
   const newGame = () => {
