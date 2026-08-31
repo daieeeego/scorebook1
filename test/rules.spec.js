@@ -164,7 +164,7 @@ describe("§7.1-第2層 / FR-20: 3アウト時のイニング交代", () => {
 
 describe("§7.1-第1層 / §7.1-第3層: ゴロアウト時の質問", () => {
   it("一塁走者がいて2アウト未満なら走者の結果を尋ねる", () => {
-    expect(questionFor(play([hit()]), 6, "ゴロアウト")?.text).toBe("一塁にいた走者はどうなりましたか");
+    expect(questionFor(play([hit()]), 6, "ゴロアウト")?.text).toBe("一塁にいたランナーはどうなりましたか");
   });
 
   it("ゴロアウト時の選択肢を仕様の4項目に限定する", () => {
@@ -189,11 +189,11 @@ describe("§7.1-第1層 / §7.1-第3層: 安打・失策時の質問", () => {
   const runnerOnSecond = () => play([hit(), runner(0, "盗塁")]);
 
   it("二塁走者がいる安打では進塁先を尋ねる", () => {
-    expect(questionFor(runnerOnSecond(), 8, "安打")?.text).toBe("二塁にいた走者はどこまで進みましたか");
+    expect(questionFor(runnerOnSecond(), 8, "安打")?.text).toBe("二塁にいたランナーはどこまで進みましたか");
   });
 
   it("二塁走者がいる失策でも進塁先を尋ねる", () => {
-    expect(questionFor(runnerOnSecond(), 6, "失策で出塁")?.text).toBe("二塁にいた走者はどこまで進みましたか");
+    expect(questionFor(runnerOnSecond(), 6, "失策で出塁")?.text).toBe("二塁にいたランナーはどこまで進みましたか");
   });
 
   it("後位走者がいないときは二塁走者の3つの行き先を提示する", () => {
