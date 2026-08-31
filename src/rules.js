@@ -943,6 +943,29 @@ const isSlotShape = (d) =>
   d && d.setup && d.setup.lineup && Array.isArray(d.setup.lineup.away) &&
   typeof d.setup.lineup.away[0] === "object" && d.setup.lineup.away[0] !== null;
 
+/** 打順枠を別の側へ移す。playerId は "away#7" のように側を含むため、
+    先攻後攻を入れ替えるときは付け替える必要がある */
+export const resideSlots = (slots, side) =>
+  slots.map((sl) => ({
+    ...sl,
+    entries: sl.entries.map((e) => ({ ...e, playerId: pid(side, uniformOf(e.playerId)) })),
+  }));
+
+/** 先攻後攻を入れ替える。自チームがどちら側かも入れ替わる */
+export const swapSides = (setup) => ({
+  ...setup,
+  teamName: { away: setup.teamName.home, home: setup.teamName.away },
+  lineup: {
+    away: resideSlots(setup.lineup.home, "away"),
+    home: resideSlots(setup.lineup.away, "home"),
+  },
+  ownSide: setup.ownSide === "away" ? "home" : "away",
+});
+
+/** 自チームの側。指定がなければ後攻（従来の既定） */
+export const ownSideOf = (setup) => setup.ownSide || "home";
+export const oppSideOf = (setup) => (ownSideOf(setup) === "home" ? "away" : "home");
+
 export const toSlots = (side, nums, positions) =>
   nums.map((n, i) => ({
     order: i + 1,
