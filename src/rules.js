@@ -20,7 +20,7 @@ export const SIDES = ["away", "home"];
 
 export const HOLD_PRESETS = [
   "守備が混乱した",
-  "走者がどこまで行ったか不明",
+  "ランナーがどこまで行ったか不明",
   "審判の判定が不明",
   "打球の落下点が見えず",
   "映像で確認する",
@@ -433,10 +433,10 @@ export function validateSub(s, sub) {
   if (retired) return `#${num} は既に退いています`;
 
   if (sub.kind === "代走") {
-    if (sub.base == null) return "どの塁の走者かを選んでください";
-    if (s.bases[sub.base] == null) return `${BASE[sub.base]}に走者がいません`;
+    if (sub.base == null) return "どの塁のランナーかを選んでください";
+    if (s.bases[sub.base] == null) return `${BASE[sub.base]}にランナーがいません`;
     if (outgoing && s.bases[sub.base] !== outgoing.playerId) {
-      return "その走者は選んだ打順の選手ではありません";
+      return "そのランナーは選んだ打順の選手ではありません";
     }
   }
   return null;
@@ -563,7 +563,7 @@ export function applyEvent(prev, e) {
        押し忘れた分だけ盤面がずれるため、1イベントで全員を進める */
     if (e.from === "all") {
       const scored = advanceAll(s, 1);
-      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ${e.reason}（走者が1つ進塁）${runsNote(scored)}`, { src });
+      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ${e.reason}（ランナーが1つ進塁）${runsNote(scored)}`, { src });
       return s;
     }
 
@@ -574,7 +574,7 @@ export function applyEvent(prev, e) {
     /* ボークは規約上「ランナー1塁進塁」。選んだ走者だけでなく全員が進む */
     if (e.reason === "ボーク") {
       const scored = advanceAll(s, 1);
-      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ボーク（走者が1つ進塁）${runsNote(scored)}`, { src });
+      push(s, `${s.inning}回${s.isTop ? "表" : "裏"} ボーク（ランナーが1つ進塁）${runsNote(scored)}`, { src });
       return s;
     }
 
@@ -639,7 +639,7 @@ export function applyEvent(prev, e) {
       s.outs += 1;
       const third = s.bases[2];
       if (third != null) { s.score[batKey(s)] += 1; s.bases[2] = null; }
-      push(s, `${t} 犠牲フライ（△${where}）${third != null ? " 三塁走者生還" : ""}${mark}`, { src });
+      push(s, `${t} 犠牲フライ（△${where}）${third != null ? " 三塁ランナー生還" : ""}${mark}`, { src });
       nextBatter(s);
       if (s.outs >= 3) endHalf(s);
       return s;
@@ -680,7 +680,7 @@ export function applyEvent(prev, e) {
       }
       if (r1 != null) s.bases[1] = r1;
       s.bases[0] = num;
-      const note = e.answer === "二塁に留まった" ? "（二塁走者は動かず）" : "";
+      const note = e.answer === "二塁に留まった" ? "（二塁ランナーは動かず）" : "";
       push(s, `${t} ${r}（${where}）${note}${runsNote(scored)}${mark}`, { src });
       nextBatter(s);
       return s;
@@ -713,11 +713,11 @@ export function applyEvent(prev, e) {
            打者は出塁するがヒットではなく、野手選択（オールセーフ）でもない */
         s.outs += 1;
         s.bases[0] = num;
-        push(s, `${t} ${r}（${where}）／一塁走者フォースアウト（二塁）・打者は一塁${mark}`, { src });
+        push(s, `${t} ${r}（${where}）／一塁ランナーはフォースアウト（二塁）・バッターは一塁${mark}`, { src });
       } else if (e.answer === "二塁へ進んだ") {
         s.outs += 1;
         const scored = advanceAll(s, 1);
-        push(s, `${t} ${r}（${where}）走者進塁${runsNote(scored)}${mark}`, { src });
+        push(s, `${t} ${r}（${where}）ランナー進塁${runsNote(scored)}${mark}`, { src });
       } else {
         s.outs += 1;
         push(s, `${t} ${r}（${where}）${mark}`, { src });
@@ -766,7 +766,7 @@ export const pendingPlays = (state) => state.log.filter((l) => l.pending);
 export function questionFor(state, zone, result) {
   if (result === "ゴロアウト" && state.bases[0] != null && state.outs < 2) {
     return {
-      text: "一塁にいた走者はどうなりましたか",
+      text: "一塁にいたランナーはどうなりましたか",
       options: ["フォースアウト（二塁）", "ダブルプレー", "二塁へ進んだ", "一塁に留まった"],
     };
   }
@@ -774,7 +774,7 @@ export function questionFor(state, zone, result) {
     // 一塁にも走者がいる場合、二塁走者は押し出されるため「留まった」は選べない
     const forced = state.bases[0] != null;
     return {
-      text: "二塁にいた走者はどこまで進みましたか",
+      text: "二塁にいたランナーはどこまで進みましたか",
       options: forced
         ? ["三塁で止まった", "本塁まで進んだ"]
         : ["二塁に留まった", "三塁で止まった", "本塁まで進んだ"],
@@ -891,7 +891,7 @@ export function runnerQuestionFor(state, from, reason) {
     options.push({ to, label: to === 3 ? "本塁まで" : `${BASE[to]}まで` });
   }
   if (options.length <= 1) return null;
-  return { text: `${BASE[from]}走者はどこまで進みましたか`, options };
+  return { text: `${BASE[from]}ランナーはどこまで進みましたか`, options };
 }
 
 /** 保留を確定するときは、その打席の時点の盤面で質問し直す */
