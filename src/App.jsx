@@ -3,6 +3,7 @@ import {
   POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS,
   RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, THROW_REASONS,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
+  swapSides, ownSideOf, oppSideOf,
   deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
   defaultMoves, moveOptions, validateMoves, defaultFielders, fieldersNotation,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
@@ -19,6 +20,7 @@ const SAVE_KEY = "scorebook.v1";
 const defaultSetup = () => ({
   date: new Date().toISOString().slice(0, 10),
   venue: "",
+  ownSide: "home",                                 // 自チームが先攻か後攻か
   teamName: { away: "相手チーム", home: "自チーム" },
   lineup: {
     away: toSlots("away", [1, 2, 3, 4, 5, 6, 7, 8, 9]),
@@ -211,9 +213,31 @@ function Setup({ initial, onStart, locked }) {
       <label style={{ fontSize: 12, color: C.sub }}>球場</label>
       <input value={s.venue} placeholder="任意" onChange={(e) => setS({ ...s, venue: e.target.value })} style={{ ...fieldStyle, marginBottom: 16 }} />
 
+      <label style={{ fontSize: 12, color: C.sub }}>自チームは</label>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 4 }}>
+        {[["away", "先攻（表）"], ["home", "後攻（裏）"]].map(([sd, l]) => {
+          const on = ownSideOf(s) === sd;
+          return (
+            <button key={sd} disabled={locked}
+              onClick={() => { if (!locked && !on) setS(swapSides(s)); }}
+              style={{
+                minHeight: 56, borderRadius: 8, fontSize: 16, fontWeight: 700,
+                background: on ? C.ink : C.card, color: on ? "#fff" : C.sub,
+                border: `2px solid ${on ? C.ink : C.line}`, opacity: locked ? 0.5 : 1,
+              }}>{l}</button>
+          );
+        })}
+      </div>
+      <p style={{ fontSize: 11, color: C.dim, marginBottom: 16 }}>
+        {locked ? "試合が始まっているため変更できません" : "切り替えると、入力済みの打順もそのまま入れ替わります"}
+      </p>
+
       {SIDES.map((side) => (
         <div key={side} style={{ marginBottom: 18 }}>
-          <label style={{ fontSize: 12, color: C.sub }}>{side === "away" ? "先攻（相手チーム）" : "後攻（自チーム）"}</label>
+          <label style={{ fontSize: 12, color: C.sub }}>
+            {side === "away" ? "先攻（表）" : "後攻（裏）"}
+            {ownSideOf(s) === side && <b style={{ color: C.ink }}> ─ 自チーム</b>}
+          </label>
           <input value={s.teamName[side]} onChange={(e) => setS({ ...s, teamName: { ...s.teamName, [side]: e.target.value } })} style={{ ...fieldStyle, marginBottom: 8 }} />
           {locked ? (
             <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 8 }}>
@@ -844,7 +868,7 @@ export default function App() {
     const blob = new Blob([JSON.stringify({ setup, events }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `score_${setup.date}_${setup.teamName.home}_vs_${setup.teamName.away}.json`;
+    a.download = `score_${setup.date}_${setup.teamName[ownSideOf(setup)]}_vs_${setup.teamName[oppSideOf(setup)]}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
