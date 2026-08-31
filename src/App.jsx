@@ -742,10 +742,10 @@ export default function App() {
       case "result": return "打球方向の選択に戻る";
       case "detail": return "結果の選択に戻る";
       case "moves": return "結果の選択に戻る";
-      case "fielders": return "走者の行き先に戻る";
+      case "fielders": return "ランナーの行き先に戻る";
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
-      case "runner-why": return "走者の選択を取り消す";
+      case "runner-why": return "ランナーの選択を取り消す";
       case "runner-detail": return "理由の選択に戻る";
       case "runner-throw": return "理由の選択に戻る";
       case "runner-far": return "理由の選択に戻る";
@@ -758,12 +758,12 @@ export default function App() {
         if (last.t === "runner") {
           if (last.fielders) return "送球先の選択に戻る";
           if (last.to != null) return "進塁先の選択に戻る";
-          return RUNNER_DETAIL_KEYS.has(last.reason) ? "詳細の選択に戻る" : "走者が動いた理由の選択に戻る";
+          return RUNNER_DETAIL_KEYS.has(last.reason) ? "詳細の選択に戻る" : "ランナーが動いた理由の選択に戻る";
         }
         if (last.result === "保留") return "メモの入力に戻る";
         if (DETAIL_KEYS.has(last.result)) return "詳細の選択に戻る";
         if (NO_BALL_KEYS.has(last.result)) return "打球以外の選択に戻る";
-        if (last.answer != null) return "走者の確認に戻る";
+        if (last.answer != null) return "ランナーの確認に戻る";
         return "結果の選択に戻る";
       }
     }
@@ -944,7 +944,7 @@ export default function App() {
                 盗塁が最も多いため1タップ、それ以外は「その他」から選ぶ */}
             {runnersOnBase.length > 0 && (
               <div style={{ marginTop: 16 }}>
-                <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>走者</div>
+                <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>ランナー</div>
                 {runnersOnBase.map((r) => (
                   <div key={r.base} style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", gap: 8, alignItems: "center", marginBottom: 8 }}>
                     <span style={{ fontSize: 14, width: 78 }}>
@@ -955,10 +955,10 @@ export default function App() {
                   </div>
                 ))}
                 {runnersOnBase.length > 1 && (
-                  <SmallBtn onClick={() => { tap(); setDraft({ from: "all" }); setMode("runner-why"); }}>全員が動いた（重盗）</SmallBtn>
+                  <SmallBtn onClick={() => { tap(); setDraft({ from: "all" }); setMode("runner-why"); }}>ランナー全員が動いた（重盗）</SmallBtn>
                 )}
                 <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
-                  打球で走者がさらに進んだときは「その他」→「打球で進塁」
+                  打球でランナーがさらに進んだときは「その他」→「打球で進塁」
                 </div>
               </div>
             )}
@@ -983,8 +983,8 @@ export default function App() {
           <>
             <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>
               {draft.from === "all"
-                ? "走者全員が動いた理由は"
-                : `${BASE[draft.from]}走者 #${uniformOf(state.bases[draft.from])} が動いた理由は`}
+                ? "ランナー全員が動いた理由は"
+                : `${BASE[draft.from]}ランナー #${uniformOf(state.bases[draft.from])} が動いた理由は`}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {RUNNER_REASONS.map((r) => (
@@ -1001,7 +1001,7 @@ export default function App() {
         {mode === "runner-detail" && (
           <>
             <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>
-              {draft.from === "all" ? "走者全員 — 詳細" : `${BASE[draft.from]}走者 #${uniformOf(state.bases[draft.from])} — 詳細`}
+              {draft.from === "all" ? "ランナー全員 — 詳細" : `${BASE[draft.from]}ランナー #${uniformOf(state.bases[draft.from])} — 詳細`}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {RUNNER_DETAIL.map((r) => (
@@ -1009,7 +1009,7 @@ export default function App() {
               ))}
             </div>
             <div style={{ fontSize: 11, color: C.dim, marginTop: 8 }}>
-              ボークは走者全員が1つ進みます
+              ボークはランナー全員が1つ進みます
             </div>
           </>
         )}
@@ -1153,16 +1153,16 @@ export default function App() {
               {draft.zone == null ? draft.result : `${POS[draft.zone]}への打球 ─ ${draft.result}`}
             </div>
             <div style={{ fontSize: 12, color: C.dim, marginBottom: 10 }}>
-              走者の行き先。このままでよければ下を押す
+              ランナーの行き先。このままでよければ下を押す
             </div>
             {[2, 1, 0].filter((i) => state.bases[i] != null).map((i) => (
               <MoveRow key={i}
-                label={`${BASE[i]}走者 #${uniformOf(state.bases[i])}`}
+                label={`${BASE[i]}ランナー #${uniformOf(state.bases[i])}`}
                 options={moveOptions(state, i)}
                 value={(draft.moves.find((m) => m.from === i) || {}).to}
                 onPick={(to) => setMove(i, to)} />
             ))}
-            <MoveRow label={`打者 #${batterNum(state)}`}
+            <MoveRow label={`バッター #${batterNum(state)}`}
               options={moveOptions(state, -1)}
               value={(draft.moves.find((m) => m.from === -1) || {}).to}
               onPick={(to) => setMove(-1, to)} />
