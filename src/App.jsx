@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS,
-  RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, THROW_REASONS,
+  RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, CATCHER_FIRST,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
   swapSides, ownSideOf, oppSideOf,
   deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
@@ -627,6 +627,7 @@ export default function App() {
   const [movesErr, setMovesErr] = useState("");
   const [rewindTo, setRewindTo] = useState(null);   // ログから選んだ巻き戻し先
   const [seq, setSeq] = useState(null);             // 守備の関与順を手で組むとき
+  const [seqFor, setSeqFor] = useState("batted");   // その関与順が打球のものか走者のものか
   const fileRef = useRef(null);
 
   /* 1操作ごとに自動保存。試合中に閉じても消えない */
@@ -697,16 +698,17 @@ export default function App() {
 
   const onRunnerWhy = (r) => {
     tap();
-    if (THROW_REASONS.has(r.k)) { setDraft({ ...draft, reason: r }); setMode("runner-throw"); return; }
+    /* アウトになった走者は、誰が刺したかを記録する。挟殺なら送球が何度も続く */
+    if (r.out) {
+      setDraft({ ...draft, reason: r });
+      setSeq({ f: CATCHER_FIRST.has(r.k) ? [2] : [], errorAt: null, kind: "" });
+      setSeqFor("runner");
+      setMode("fielders");
+      return;
+    }
     const q = runnerQuestionFor(state, draft.from, r.k);
     if (q) { setDraft({ ...draft, reason: r }); setQuestion(q); setMode("runner-far"); return; }
     commit({ t: "runner", from: draft.from, reason: r.k, out: r.out });
-  };
-
-  /* 盗塁アウトは捕手からの送球が前提。受けた野手だけを問う（2-6TO） */
-  const onRunnerThrow = (n) => {
-    tap();
-    commit({ t: "runner", from: draft.from, reason: draft.reason.k, out: true, fielders: [2, n] });
   };
 
   const onRunnerFar = (o) => {
@@ -733,13 +735,26 @@ export default function App() {
   const openSeq = () => {
     tap();
     setSeq(seq || defaultFielders(draft.zone, draft.result, draft.moves));
+    setSeqFor("batted");
     setMode("fielders");
   };
   const seqAdd = (n) => { tap(); setSeq((q) => ({ ...q, f: [...q.f, n] })); };
   const seqDrop = () => { tap(); setSeq((q) => ({ ...q, f: q.f.slice(0, -1), errorAt: q.errorAt != null && q.errorAt >= q.f.length - 1 ? null : q.errorAt })); };
   const seqError = (i) => { tap(); setSeq((q) => ({ ...q, errorAt: q.errorAt === i ? null : i, kind: q.errorAt === i ? "" : q.kind })); };
   const seqKind = (k) => { tap(); setSeq((q) => ({ ...q, kind: q.kind === k ? "" : k })); };
-  const seqDone = () => { tap(); setDraft((d) => ({ ...d, fielders: seq.f, errorAt: seq.errorAt, errorKind: seq.kind })); setMode("moves"); };
+  const seqDone = () => {
+    tap();
+    if (seqFor === "runner") {
+      commit({
+        t: "runner", from: draft.from, reason: draft.reason.k, out: true,
+        ...(seq.f.length ? { fielders: seq.f, errorAt: seq.errorAt, errorKind: seq.kind } : {}),
+      });
+      setSeq(null); setSeqFor("batted");
+      return;
+    }
+    setDraft((d) => ({ ...d, fielders: seq.f, errorAt: seq.errorAt, errorKind: seq.kind }));
+    setMode("moves");
+  };
 
   const setMove = (from, to) => {
     tap();
@@ -771,7 +786,6 @@ export default function App() {
       case "hold-note": return "結果の選択に戻る";
       case "runner-why": return "ランナーの選択を取り消す";
       case "runner-detail": return "理由の選択に戻る";
-      case "runner-throw": return "理由の選択に戻る";
       case "runner-far": return "理由の選択に戻る";
       default: {
         if (!events.length) return "戻せる記録がありません";
@@ -800,7 +814,7 @@ export default function App() {
       else if (mode === "no-ball") { setMode("pitch"); setDraft(null); }
       else if (mode === "result") { setMode("zone"); setDraft(null); }
       else if (mode === "detail") setMode("result");
-      else if (mode === "fielders") { setSeq(null); setMode("moves"); }
+      else if (mode === "fielders") { const to = seqFor === "runner" ? "runner-why" : "moves"; setSeq(null); setSeqFor("batted"); setMode(to); }
       else if (mode === "moves") {
         setMovesErr("");
         if (draft.zone == null) setMode("no-ball");
@@ -810,7 +824,7 @@ export default function App() {
       else if (mode === "hold-note") { setNote(""); setDraft({ zone: draft.zone }); setMode("detail"); }
       else if (mode === "runner-why") { setDraft(null); setMode("pitch"); }
       else if (mode === "runner-detail") setMode("runner-why");
-      else if (mode === "runner-throw" || mode === "runner-far") { setQuestion(null); setMode("runner-why"); }
+      else if (mode === "runner-far") { setQuestion(null); setMode("runner-why"); }
       return;
     }
     if (!events.length) return;
@@ -845,7 +859,12 @@ export default function App() {
     if (last.t === "runner") {
       const r = [...RUNNER_REASONS, ...RUNNER_DETAIL].find((x) => x.k === last.reason);
       setDraft({ from: last.from, reason: r });
-      if (last.fielders) { setQuestion(null); setMode("runner-throw"); return; }
+      if (last.fielders) {
+        setQuestion(null);
+        setSeq({ f: last.fielders, errorAt: last.errorAt == null ? null : last.errorAt, kind: last.errorKind || "" });
+        setSeqFor("runner"); setMode("fielders");
+        return;
+      }
       if (last.to != null) { setQuestion(runnerQuestionFor(prev, last.from, last.reason)); setMode("runner-far"); return; }
       setQuestion(null);
       setMode(RUNNER_DETAIL_KEYS.has(last.reason) ? "runner-detail" : "runner-why");
@@ -1064,15 +1083,6 @@ export default function App() {
           </>
         )}
 
-        {mode === "runner-throw" && (
-          <>
-            <div style={{ fontSize: 14, color: C.sub, marginBottom: 6 }}>捕手の送球を受けたのは</div>
-            <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.line}` }}>
-              <FieldPicker onPick={onRunnerThrow} />
-            </div>
-          </>
-        )}
-
         {mode === "runner-far" && (
           <>
             <div style={{ background: C.card, border: `2px solid ${C.red}`, borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 15 }}>
@@ -1152,7 +1162,11 @@ export default function App() {
 
         {mode === "fielders" && (
           <>
-            <div style={{ fontSize: 14, color: C.sub, marginBottom: 6 }}>送球の順</div>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 6 }}>
+              {seqFor === "runner"
+                ? `${draft.from === "all" ? "ランナー" : `${BASE[draft.from]}ランナー`} ─ ${draft.reason.l}。送球の順`
+                : "送球の順"}
+            </div>
             <div style={{ background: C.card, border: `2px solid ${C.ink}`, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
               <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, letterSpacing: 1 }}>
                 {fieldersNotation(seq) || "—"}
