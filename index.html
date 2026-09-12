@@ -16,6 +16,8 @@
         @page { size: A4 landscape; margin: 8mm; }
         html, body, #root { height: auto; background: #fff; }
         .no-print { display: none !important; }
+        /* スコアブックは A4横の幅いっぱいに刷る。外側の余白があるとはみ出す */
+        .sheet-wrap { padding: 0 !important; overflow: visible !important; }
       }
     </style>
   </head>
