@@ -6,7 +6,7 @@
    端末で扱える文字に置き換えているため、記号は原本と厳密には一致しない。
    ゴロ・フライ・ライナーの補助線（凵／⌐／横線）は ⌄ ⌃ ‾ で代用している。 */
 import fs from "fs";
-import { initialState, applyEvent, batKey, batterId, batterOrder, uniformOf, POS, fieldersOf, fieldersNotation }
+import { initialState, applyEvent, batKey, batterId, batterOrder, uniformOf, POS, fieldersOf, fieldersNotation, zoneNotation }
   from "../src/rules.js";
 
 const PITCH = { "ボール":"●", "見逃し":"○", "空振り":"×", "ファール":"―", "ストライク":"○", "ファウル":"―" };
@@ -15,17 +15,24 @@ const FLY = (z) => `${z}⌃`;            // フライ（本来は数字の上に
 const LIN = (z) => `${z}‾`;            // ライナー（本来は数字の上に横線）
 const HIT = (t) => `(${t})`;           // 内野安打の弧
 
-function resultMark(r, zone, answer) {
-  const z = zone == null ? "" : zone;
+function resultMark(r, zone, answer, zone2, batted) {
+  const z = zoneNotation(zone, zone2);
+  /* 記法規約 §4 の補助線。安打や長打は結果の名前に性質が入らないので batted で受ける */
+  const mk = (s) => (batted === "ゴロ" ? GRD(s) : batted === "フライ" ? FLY(s) : batted === "ライナー" ? LIN(s) : s);
   switch (r) {
-    case "安打":        return z && z <= 6 ? HIT(GRD(z)) : `${z}`;
-    case "二塁打":      return `${z} 2B`;
-    case "三塁打":      return `${z} 3B`;
-    case "本塁打":      return `${z} HR`;
-    case "ランニングホームラン": return `R.H ${z}`;
+    case "安打": {
+      /* 内野安打は弧で囲む。性質の指定がなければ従来どおりゴロとみなす */
+      const inf = zone2 == null && zone != null && zone <= 6;
+      const s = batted ? mk(z) : (inf ? GRD(z) : z);
+      return inf ? HIT(s) : s;
+    }
+    case "二塁打":      return `${mk(z)} 2B`;
+    case "三塁打":      return `${mk(z)} 3B`;
+    case "本塁打":      return `${mk(z)} HR`;
+    case "ランニングホームラン": return `R.H ${mk(z)}`;
     case "バントヒット": return `B ${z}`;
     case "テキサスヒット": return `T.${z}`;
-    case "失策で出塁":   return `${z}E`;
+    case "失策で出塁":   return `${mk(z)}E`;
     case "ゴロエラー":   return `${GRD(z)}E`;
     case "フライエラー": return `${FLY(z)}E`;
     case "悪送球（高投）": return `${z}ET`;
@@ -82,9 +89,10 @@ for (const e of d.events) {
   }
   if (e.t === "inplay") {
     const c = cell(before, bid, ord);
-    c.result = resultMark(e.result, e.zone, e.answer);
+    c.result = resultMark(e.result, e.zone, e.answer, e.zone2, e.batted);
     const fx = fieldersNotation(fieldersOf(e));
-    if (fx && fx !== String(e.zone)) c.result = c.result.replace(String(e.zone), fx);
+    const zt = zoneNotation(e.zone, e.zone2);
+    if (fx && fx !== zt) c.result = c.result.replace(zt, fx);
     if (e.note) c.result += ` [${e.note}]`;
     s = applyEvent(before, e);
     continue;
