@@ -6,6 +6,7 @@ import {
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
   swapSides, ownSideOf, oppSideOf, HHMM, scoreSheet,
   deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
+  sheetSummary, inningsPitched, sideOf,
   defaultMoves, moveOptions, validateMoves, defaultFielders, fieldersNotation,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
   pitcherId, uniformOf, validateSub, inferSubKind, pid,
@@ -630,93 +631,299 @@ function Sheet({ state, events, setup, onClose, onCommit }) {
   );
 }
 
-/* ---------------- スコアブック ----------------
-   打順 × イニングのマス目。紙の様式そのものではないが、記法規約の記号で
-   1打席ずつ読める形にして、印刷（ブラウザのA4印刷）まで通す */
+/* ---------------- スコアブック（成美堂「保存版」の様式） ----------------
+   成美堂スポーツ出版「野球スコアブック 保存版」（補充用紙 9107 と同じ様式）に合わせる。
+   A4横・13イニング・1ページ1チーム。欄の名称と並びは現物どおりにし、
+   イベント列から出せる数字だけを入れる。氏名・打方・監督名・勝負・セーブ・
+   自責点は記録していないので空のままにする（FR-14 ほか）。 */
 
-function Cell({ c }) {
-  if (!c) return <td style={{ border: `1px solid ${C.line}`, padding: 2, minWidth: 62 }} />;
-  const bar = c.kind === "ground" ? { borderBottom: `2px solid ${C.ink}` }
-    : c.kind === "fly" ? { borderTop: `2px solid ${C.ink}` }
-    : c.kind === "liner" ? { borderTop: `2px solid ${C.ink}` } : {};
+const PW = 1052;            // A4横 297mm − 余白8mm×2 を 96dpi に直した幅
+const SLOT = 46;            // 打順1枠の高さ
+const INNS = Array.from({ length: 13 }, (_, i) => i + 1);
+const SK = "#2F5D3A";       // 罫線（現物は緑）
+const SKT = "#8FB199";      // ダイヤの細罫
+
+const cw = { po: 15, as: 15, er: 15, dp: 15, ord: 17, seat: 19, bat: 13, name: 66, num: 19 };
+const rw = { pa: 17, ab: 17, run: 17, h: 15, etc: 15 };
+const LEFT = cw.po + cw.as + cw.er + cw.dp + cw.ord + cw.seat * 3 + cw.bat + cw.name + cw.num;
+const RIGHT = rw.pa + rw.ab + rw.run + rw.h * 4 + rw.etc * 9;
+const IW = Math.floor((PW - LEFT - RIGHT) / 13);
+
+const bx = (extra) => ({
+  border: `1px solid ${SK}`, padding: 0, textAlign: "center",
+  fontSize: 8, lineHeight: "10px", color: "#123", ...extra,
+});
+const vert = {
+  writingMode: "vertical-rl", textOrientation: "upright",
+  letterSpacing: -1.5, margin: "0 auto", fontSize: 7, lineHeight: "10px", whiteSpace: "nowrap",
+};
+const HDR1 = 44, HDR2 = 26;   // 見出し2段。縦書き3文字が入る高さ
+const n0 = (v) => (v ? String(v) : "");
+
+/** 1マス。投球・ダイヤ・打者結果・走者・アウトカウント・得点（記法規約 §1） */
+function PaperCell({ c }) {
+  const line = c && c.kind === "ground" ? { borderBottom: "1px solid #123" }
+    : c && (c.kind === "fly" || c.kind === "liner") ? { borderTop: "1px solid #123" } : {};
   return (
-    <td style={{ border: `1px solid ${C.line}`, padding: "2px 3px", minWidth: 62, verticalAlign: "top" }}>
-      <div style={{ display: "flex", gap: 3 }}>
-        <div style={{ fontSize: 8, color: C.sub, lineHeight: 1.15, width: 12, wordBreak: "break-all" }}>
-          {c.pitches.join("")}
+    <td style={bx({ height: SLOT, verticalAlign: "top" })}>
+      <div style={{ position: "relative", width: "100%", height: SLOT - 2 }}>
+        <div style={{ position: "absolute", left: 0, top: 0, width: 9, fontSize: 5.5, lineHeight: "6px" }}>
+          {(c ? c.pitches : []).map((p, i) => <div key={i}>{p}</div>)}
         </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 3 }}>
-            <b style={{ fontFamily: MONO, fontSize: 11 }}>{c.outs}</b>
-            <span style={{ fontFamily: MONO, fontSize: 12, ...bar }}>{c.result}</span>
-            {c.scored && <span style={{ color: C.red, fontSize: 11 }}>●</span>}
+        <svg viewBox="0 0 44 44" style={{ position: "absolute", left: 9, top: 0, width: IW - 10, height: SLOT - 4 }}>
+          <path d="M22 9 L35 22 L22 35 L9 22 Z" fill="none" stroke={SKT} strokeWidth="0.8" strokeDasharray="2 2" />
+        </svg>
+        {c && c.runner.length > 0 && (
+          <div style={{ position: "absolute", right: 0, top: 0, fontSize: 5.5, lineHeight: "6px", textAlign: "right" }}>
+            {c.runner.map((r, i) => <div key={i}>{r}</div>)}
           </div>
-          {c.runner.length > 0 && (
-            <div style={{ fontSize: 9, color: C.sub }}>{c.runner.join(" ")}</div>
-          )}
-        </div>
+        )}
+        {c && c.outs && (
+          <div style={{ position: "absolute", left: 9, top: SLOT / 2 - 12, width: IW - 10, textAlign: "center", fontSize: 7, fontWeight: 700 }}>
+            {c.outs}
+          </div>
+        )}
+        {c && c.result && (
+          <div style={{ position: "absolute", right: 1, bottom: 1, fontSize: 8, fontWeight: 600, whiteSpace: "nowrap", ...line }}>
+            {c.result}
+          </div>
+        )}
+        {c && c.scored && (
+          <div style={{ position: "absolute", left: 9, bottom: 0, width: IW - 10, textAlign: "center", fontSize: 8 }}>●</div>
+        )}
       </div>
     </td>
   );
 }
 
 function ScoreSheet({ setup, events, onClose }) {
-  const { cells, maxInning } = useMemo(() => scoreSheet(events, setup), [events, setup]);
-  const innings = Array.from({ length: Math.max(maxInning, 7) }, (_, i) => i + 1);
+  const { cells } = useMemo(() => scoreSheet(events, setup), [events, setup]);
+  const sum = useMemo(() => sheetSummary(events, setup), [events, setup]);
   const own = ownSideOf(setup);
   const sides = [own, oppSideOf(setup)];
+  const st = sum.state;
+
+  /* 上部のスコアボード。現物は各ページの頭に両チーム分が載る */
+  const board = (
+    <table style={{ borderCollapse: "collapse", width: PW, tableLayout: "fixed", marginBottom: 4 }}>
+      <tbody>
+        <tr>
+          <td style={bx({ width: 120, fontSize: 9 })}>チーム名</td>
+          <td style={bx({ width: 70, fontSize: 9 })}>（監督名）</td>
+          {INNS.map((i) => <td key={i} style={bx({ width: 26, fontSize: 9 })}>{i}</td>)}
+          <td style={bx({ width: 34, fontSize: 9 })}>合 計</td>
+          <td style={bx({ fontSize: 9 })} rowSpan={3}>記事</td>
+        </tr>
+        {["away", "home"].map((sd) => (
+          <tr key={sd}>
+            <td style={bx({ fontSize: 9, height: 16 })}>{setup.teamName[sd]}</td>
+            <td style={bx({})} />
+            {INNS.map((i) => {
+              const r = sum.inn[sd].get(i);
+              return <td key={i} style={bx({})}>{r && i <= st.inning ? r.run : ""}</td>;
+            })}
+            <td style={bx({ fontWeight: 700 })}>{st.score[sd]}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+
+  const page = (side, idx) => {
+    const slots = setup.lineup[side];
+    const tot = { pa: 0, ab: 0, run: 0, h1: 0, h2: 0, h3: 0, hr: 0, tb: 0, rbi: 0, sb: 0, cs: 0, sacB: 0, sacF: 0, bb: 0, so: 0, lob: 0 };
+    const rows = slots.map((slot, si) => {
+      const order = si + 1;
+      const es = slot.entries;
+      const agg = es.reduce((a, e) => {
+        const b = sum.bat.get(e.playerId);
+        if (b) for (const k of Object.keys(a)) a[k] += b[k] || 0;
+        return a;
+      }, { pa: 0, ab: 0, run: 0, h1: 0, h2: 0, h3: 0, hr: 0, rbi: 0, sb: 0, cs: 0, sacB: 0, sacF: 0, bb: 0, so: 0, lob: 0, po: 0, as: 0, err: 0, dp: 0 });
+      const tb = agg.h1 + agg.h2 * 2 + agg.h3 * 3 + agg.hr * 4;
+      for (const k of Object.keys(tot)) tot[k] += k === "tb" ? tb : (agg[k] || 0);
+      const stack = (f) => (
+        <div style={{ fontSize: 7, lineHeight: "12px" }}>
+          {es.slice(0, 3).map((e, i) => <div key={i}>{f(e)}</div>)}
+        </div>
+      );
+      return (
+        <tr key={order}>
+          <td style={bx({})}>{n0(agg.po)}</td>
+          <td style={bx({})}>{n0(agg.as)}</td>
+          <td style={bx({})}>{n0(agg.err)}</td>
+          <td style={bx({})}>{n0(agg.dp)}</td>
+          <td style={bx({ fontSize: 7, lineHeight: "12px" })}>
+            <div>{order}</div><div>{order + 10}</div><div>{order + 20}</div>
+          </td>
+          <td style={bx({})}>{stack((e) => (e.position != null ? e.position : ""))}</td>
+          <td style={bx({})} />
+          <td style={bx({})} />
+          <td style={bx({})} />
+          <td style={bx({})} />
+          <td style={bx({ fontSize: 8 })}>{stack((e) => uniformOf(e.playerId))}</td>
+          {INNS.map((i) => <PaperCell key={i} c={cells.get(`${side}|${order}|${i}`)} />)}
+          <td style={bx({})}>{n0(agg.pa)}</td>
+          <td style={bx({})}>{n0(agg.ab)}</td>
+          <td style={bx({})}>{n0(agg.run)}</td>
+          <td style={bx({})}>{n0(agg.h1)}</td>
+          <td style={bx({})}>{n0(agg.h2)}</td>
+          <td style={bx({})}>{n0(agg.h3)}</td>
+          <td style={bx({})}>{n0(agg.hr)}</td>
+          <td style={bx({})}>{n0(tb)}</td>
+          <td style={bx({})}>{n0(agg.rbi)}</td>
+          <td style={bx({})}>{n0(agg.sb)}</td>
+          <td style={bx({})}>{n0(agg.cs)}</td>
+          <td style={bx({})}>{n0(agg.sacB)}</td>
+          <td style={bx({})}>{n0(agg.sacF)}</td>
+          <td style={bx({})}>{n0(agg.bb)}</td>
+          <td style={bx({})}>{n0(agg.so)}</td>
+          <td style={bx({})}>{n0(agg.lob)}</td>
+        </tr>
+      );
+    });
+    const pitchers = [...sum.pit.entries()].filter(([id]) => sideOf(id) === side);
+
+    return (
+      <div key={side} style={{ width: PW, pageBreakAfter: idx === 0 ? "always" : "auto", breakAfter: idx === 0 ? "page" : "auto" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, margin: "6px 0 2px" }}>
+          {setup.teamName[side]}{side === own ? "（自チーム）" : ""}　{setup.date}
+          {"　"}{setup.venue}{"　"}開始 {HHMM(setup.startedAt) || "—"}　終了 {HHMM(setup.endedAt) || "—"}
+        </div>
+        {board}
+        <table style={{ borderCollapse: "collapse", width: PW, tableLayout: "fixed" }}>
+          <thead>
+            <tr style={{ height: HDR1 + HDR2 }}>
+              <td style={bx({ width: cw.po })} rowSpan={2}><span style={vert}>刺殺</span></td>
+              <td style={bx({ width: cw.as })} rowSpan={2}><span style={vert}>補殺</span></td>
+              <td style={bx({ width: cw.er })} rowSpan={2}><span style={vert}>失策</span></td>
+              <td style={bx({ width: cw.dp })} rowSpan={2}><span style={vert}>併殺</span></td>
+              <td style={bx({ width: cw.ord })} rowSpan={2}><span style={vert}>打順</span></td>
+              <td style={bx({ fontSize: 8, height: HDR1 })} colSpan={3}>シート</td>
+              <td style={bx({ fontSize: 8 })} colSpan={3}>{side === "away" ? "先攻" : "後攻"}</td>
+              {INNS.map((i) => <td key={i} style={bx({ width: IW, fontSize: 11, fontWeight: 700 })} rowSpan={2}>{i}</td>)}
+              <td style={bx({ width: rw.pa })} rowSpan={2}><span style={vert}>打席数</span></td>
+              <td style={bx({ width: rw.ab })} rowSpan={2}><span style={vert}>打数</span></td>
+              <td style={bx({ width: rw.run })} rowSpan={2}><span style={vert}>得点</span></td>
+              <td style={bx({ fontSize: 8 })} colSpan={4}>安 打</td>
+              {["塁打数", "得点打", "盗塁", "盗塁刺", "犠打", "犠飛", "四死球", "三振", "残塁"].map((t) => (
+                <td key={t} style={bx({ width: rw.etc })} rowSpan={2}><span style={vert}>{t}</span></td>
+              ))}
+            </tr>
+            <tr style={{ height: HDR2 }}>
+              <td style={bx({ width: cw.seat, fontSize: 7 })}>先発</td>
+              <td style={bx({ width: cw.seat })} />
+              <td style={bx({ width: cw.seat })} />
+              <td style={bx({ width: cw.bat })}><span style={vert}>打方</span></td>
+              <td style={bx({ width: cw.name, fontSize: 7 })}>氏名</td>
+              <td style={bx({ width: cw.num })}><span style={vert}>背番号</span></td>
+              {["単打", "二塁打", "三塁打", "本塁打"].map((t) => (
+                <td key={t} style={bx({ width: rw.h })}><span style={vert}>{t}</span></td>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows}
+            <tr>
+              <td style={bx({ fontSize: 9 })} colSpan={5} rowSpan={3}>合 計</td>
+              <td style={bx({ fontSize: 6.5 })} colSpan={6}>安打／四死球／失策</td>
+              {INNS.map((i) => {
+                const r = sum.inn[side].get(i);
+                return <td key={i} style={bx({ fontSize: 7 })}>{r ? `${r.h}／${r.bb}／${r.err}` : ""}</td>;
+              })}
+              <td style={bx({})}>{n0(tot.pa)}</td>
+              <td style={bx({})}>{n0(tot.ab)}</td>
+              <td style={bx({})}>{n0(tot.run)}</td>
+              <td style={bx({})}>{n0(tot.h1)}</td>
+              <td style={bx({})}>{n0(tot.h2)}</td>
+              <td style={bx({})}>{n0(tot.h3)}</td>
+              <td style={bx({})}>{n0(tot.hr)}</td>
+              <td style={bx({})}>{n0(tot.tb)}</td>
+              <td style={bx({})}>{n0(tot.rbi)}</td>
+              <td style={bx({})}>{n0(tot.sb)}</td>
+              <td style={bx({})}>{n0(tot.cs)}</td>
+              <td style={bx({})}>{n0(tot.sacB)}</td>
+              <td style={bx({})}>{n0(tot.sacF)}</td>
+              <td style={bx({})}>{n0(tot.bb)}</td>
+              <td style={bx({})}>{n0(tot.so)}</td>
+              <td style={bx({})}>{n0(tot.lob)}</td>
+            </tr>
+            <tr>
+              <td style={bx({ fontSize: 9 })} colSpan={6}>得　点</td>
+              {INNS.map((i) => {
+                const r = sum.inn[side].get(i);
+                return <td key={i} style={bx({})}>{r && i <= st.inning ? r.run : ""}</td>;
+              })}
+              <td style={bx({})} colSpan={16} />
+            </tr>
+            <tr>
+              <td style={bx({ fontSize: 9 })} colSpan={6}>投 球 数</td>
+              {INNS.map((i) => {
+                const r = sum.inn[side].get(i);
+                return <td key={i} style={bx({})}>{r && r.pitches ? r.pitches : ""}</td>;
+              })}
+              <td style={bx({})} colSpan={16} />
+            </tr>
+          </tbody>
+        </table>
+
+        <table style={{ borderCollapse: "collapse", width: PW, tableLayout: "fixed", marginTop: 4 }}>
+          <tbody>
+            <tr>
+              <td style={bx({ width: 18, fontSize: 8 })} rowSpan={7}><span style={vert}>投手</span></td>
+              <td style={bx({ width: 24, fontSize: 7 })} />
+              <td style={bx({ width: 96, fontSize: 8 })}>氏　名</td>
+              {["勝負", "セーブ", "投球回数", "打者", "打数", "投球数", "安打", "本塁打", "犠打", "犠飛", "四球", "死球", "三振", "暴投", "ボーク", "失点", "自責点"].map((t) => (
+                <td key={t} style={bx({ fontSize: 6.5 })}>{t}</td>
+              ))}
+            </tr>
+            {[0, 1, 2, 3, 4, 5].map((i) => {
+              const row = pitchers[i];
+              const p = row ? row[1] : null;
+              return (
+                <tr key={i}>
+                  <td style={bx({ fontSize: 7, height: 14 })}>{i === 0 ? "先発" : i + 1}</td>
+                  <td style={bx({ fontSize: 8 })}>{row ? `#${uniformOf(row[0])}` : ""}</td>
+                  <td style={bx({})} />
+                  <td style={bx({})} />
+                  <td style={bx({})}>{p ? inningsPitched(p.outs) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.bf) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.ab) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.pitches) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.h) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.hr) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.sacB) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.sacF) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.bb) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.hbp) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.so) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.wp) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.bk) : ""}</td>
+                  <td style={bx({})}>{p ? n0(p.runs) : ""}</td>
+                  <td style={bx({})} />
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#fff", zIndex: 60, overflow: "auto" }}>
-      <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 12px", background: C.ink, color: "#fff", position: "sticky", top: 0 }}>
-        <div style={{ flex: 1, fontSize: 16, fontWeight: 700 }}>スコアブック</div>
+      <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 12px", background: C.ink, color: "#fff", position: "sticky", top: 0, zIndex: 2 }}>
+        <div style={{ flex: 1, fontSize: 16, fontWeight: 700 }}>スコアブック（成美堂 保存版の様式）</div>
         <button onClick={() => window.print()} style={{ minHeight: 44, padding: "0 14px", borderRadius: 8, background: "#fff", border: "none", color: C.ink, fontSize: 15, fontWeight: 700 }}>印刷</button>
         <button onClick={onClose} style={{ minHeight: 44, padding: "0 14px", borderRadius: 8, background: "transparent", border: "2px solid #fff", color: "#fff", fontSize: 15 }}>閉じる</button>
       </div>
-
-      <div style={{ padding: 12, color: C.ink }}>
-        <div style={{ fontSize: 13, marginBottom: 2 }}>
-          {setup.date}　{setup.venue || "球場未記入"}
-        </div>
-        <div style={{ fontSize: 13, marginBottom: 10 }}>
-          開始 {HHMM(setup.startedAt) || "—"}　終了 {HHMM(setup.endedAt) || "—"}
-        </div>
-
-        {sides.map((side) => (
-          <div key={side} style={{ marginBottom: 18 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
-              {setup.teamName[side]}{side === own ? "（自チーム）" : ""}
-            </div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
-                <thead>
-                  <tr>
-                    <th style={{ border: `1px solid ${C.line}`, padding: "2px 4px", fontSize: 11 }}>打順</th>
-                    {innings.map((i) => (
-                      <th key={i} style={{ border: `1px solid ${C.line}`, padding: "2px 4px", fontSize: 11 }}>{i}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((o) => (
-                    <tr key={o}>
-                      <th style={{ border: `1px solid ${C.line}`, padding: "2px 4px", fontSize: 11, whiteSpace: "nowrap" }}>
-                        {o}　#{uniformOf(activeEntry(setup.lineup[side][o - 1]).playerId)}
-                      </th>
-                      {innings.map((i) => <Cell key={i} c={cells.get(`${side}|${o}|${i}`)} />)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ))}
-
-        <div style={{ fontSize: 11, color: C.sub, lineHeight: 1.7 }}>
-          左の細い列が投球（●ボール ○見逃し ×空振り ―ファール）。
-          数字の下線がゴロ、上線がフライ・ライナー。●は得点、I／II／IIIはアウトカウント。
+      <div className="sheet-wrap" style={{ overflowX: "auto", padding: 8 }}>
+        {sides.map((s, i) => page(s, i))}
+        <div className="no-print" style={{ fontSize: 11, color: C.sub, lineHeight: 1.7, width: PW, marginTop: 8 }}>
+          成美堂スポーツ出版「野球スコアブック 保存版」（補充用紙 9107）の様式。A4横・1ページ1チーム。
+          左の細い列が投球（●ボール ○見逃し ×空振り ―ファール）。数字の下線がゴロ、上線がフライ・ライナー。
           <br />
-          <b>紙の様式そのものではありません。</b>実寸の再現は未着手です（要件定義 OPEN-02）。
+          氏名・打方・監督名・勝負・セーブ・自責点は記録していないため空欄です。
         </div>
       </div>
     </div>
