@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS,
+  GAPS, BATTED_KINDS, asksBatted, zoneName,
   RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, CATCHER_FIRST,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
   swapSides, ownSideOf, oppSideOf,
@@ -130,8 +131,28 @@ const FIELDERS = [
   { n: 7, x: 45, y: 46 }, { n: 8, x: 150, y: 28 }, { n: 9, x: 255, y: 46 },
 ];
 
-function FieldPicker({ onPick }) {
+/* 守備位置の間を抜けた打球（記法規約 §3 の `7.8`）。図の中に置くと
+   どの2つも10px空ける配置が崩れるため、図の下に別の行として並べる */
+function GapRow({ onPick }) {
   return (
+    <div style={{ padding: "0 10px 10px" }}>
+      <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>守備の間を抜けた</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+        {GAPS.map((g) => (
+          <button key={`${g.a}.${g.b}`} onClick={() => onPick(g.a, g.b)}
+            style={{ background: C.paper, color: C.ink, border: `2px solid ${C.line}`,
+              minHeight: 48, fontSize: 15, borderRadius: 8, fontWeight: 600 }}>
+            {g.l}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FieldPicker({ onPick, gaps = true }) {
+  return (
+    <>
     <svg viewBox="0 0 300 250" style={{ width: "100%", maxHeight: 300 }}>
       <path d="M150 214 L300 64 L300 0 L0 0 L0 64 Z" fill={C.field} />
       <path d="M150 214 L60 124 L150 34 L240 124 Z" fill="none" stroke={C.line} strokeWidth="2" />
@@ -148,6 +169,8 @@ function FieldPicker({ onPick }) {
         );
       })}
     </svg>
+    {gaps && <GapRow onPick={onPick} />}
+    </>
   );
 }
 
@@ -491,7 +514,7 @@ function StatsTab({ state }) {
 }
 
 function PendingTab({ state, events, setup, onResolve }) {
-  const [target, setTarget] = useState(null);   // { index, zone }
+  const [target, setTarget] = useState(null);   // { index, zone, zone2 }
   const [result, setResult] = useState(null);
   const pend = state.log.filter((l) => l.pending);
 
@@ -524,7 +547,7 @@ function PendingTab({ state, events, setup, onResolve }) {
   if (target != null) {
     return (
       <>
-        <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>{POS[target.zone]}への打球 — 結果は</div>
+        <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>{zoneName(target.zone, target.zone2)}への打球 — 結果は</div>
         {RESOLVABLE.map((g) => (
           <div key={g.label} style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>{g.label}</div>
@@ -553,7 +576,7 @@ function PendingTab({ state, events, setup, onResolve }) {
         {pend.map((l) => {
           const ev = events[l.src];
           return (
-            <button key={l.src} onClick={() => setTarget({ index: l.src, zone: ev.zone })}
+            <button key={l.src} onClick={() => setTarget({ index: l.src, zone: ev.zone, zone2: ev.zone2 })}
               style={{ textAlign: "left", background: C.card, border: `2px solid ${C.red}`, borderRadius: 8, padding: "10px 12px", minHeight: 56, color: C.ink }}>
               <div style={{ fontSize: 14 }}>{l.text}</div>
               <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>押して結果を決める</div>
@@ -716,25 +739,46 @@ export default function App() {
     commit({ t: "runner", from: draft.from, reason: draft.reason.k, out: false, to: o.to });
   };
 
-  const onZone = (z) => { tap(); setDraft({ zone: z }); setMode("result"); };
+  const onZone = (z, z2) => {
+    tap();
+    setDraft(z2 == null ? { zone: z } : { zone: z, zone2: z2 });
+    setMode("result");
+  };
+
+  /* 打球方向・結果・打球の性質が決まったあとの共通の続き */
+  const afterResult = (zone, zone2, r, batted) => {
+    const moves = defaultMoves(state, r);
+    const base = {
+      zone, ...(zone2 != null ? { zone2 } : {}), result: r,
+      ...(batted ? { batted } : {}),
+    };
+    /* 走者がいなければ行き先は一通りに決まるので、確認画面を出さない */
+    if (state.bases.every((b) => b == null)) { commit({ t: "inplay", ...base, moves }); return; }
+    setMovesErr("");
+    setDraft({ ...base, moves });
+    setMode("moves");
+  };
 
   const onResult = (r) => {
     tap();
     const zone = draft ? draft.zone : null;
-    if (r === "保留") { setDraft({ zone, result: r }); setNote(""); setMode("hold-note"); return; }
-    const moves = defaultMoves(state, r);
-    /* 走者がいなければ行き先は一通りに決まるので、確認画面を出さない */
-    if (state.bases.every((b) => b == null)) { commit({ t: "inplay", zone, result: r, moves }); return; }
-    setMovesErr("");
-    setDraft({ zone, result: r, moves });
-    setMode("moves");
+    const zone2 = draft ? draft.zone2 : null;
+    if (r === "保留") { setDraft({ zone, zone2, result: r }); setNote(""); setMode("hold-note"); return; }
+    /* ヒットや長打は結果の名前に打球の性質が入らない。記法規約 §4 の補助線
+       （ゴロ＝凵／フライ＝⌐／ライナー＝横線）を書けるよう、続けて聞く */
+    if (asksBatted(r)) { setDraft({ zone, zone2, result: r }); setMode("batted"); return; }
+    afterResult(zone, zone2, r, null);
   };
+
+  const onBatted = (k) => { tap(); afterResult(draft.zone, draft.zone2, draft.result, k); };
 
   /* 導出では決まらない関与順（併殺の中継、受け手のエラー）を手で組む。
      初期値は導出結果なので、足りないところだけ触ればよい */
   const openSeq = () => {
     tap();
-    setSeq(seq || defaultFielders(draft.zone, draft.result, draft.moves));
+    setSeq(seq || (draft.zone2 != null
+      ? { f: [], errorAt: null, kind: "" }
+      : defaultFielders(draft.zone, draft.result, draft.moves)));
     setSeqFor("batted");
     setMode("fielders");
   };
@@ -767,12 +811,21 @@ export default function App() {
     if (problem) { setMovesErr(problem); return; }
     tap();
     commit({
-      t: "inplay", zone: draft.zone, result: draft.result, moves: draft.moves,
+      t: "inplay", zone: draft.zone, ...(draft.zone2 != null ? { zone2: draft.zone2 } : {}),
+      result: draft.result, moves: draft.moves,
+      ...(draft.batted ? { batted: draft.batted } : {}),
       ...(draft.fielders ? { fielders: draft.fielders, errorAt: draft.errorAt, errorKind: draft.errorKind } : {}),
     });
   };
 
-  const onAnswer = (a) => { tap(); commit({ t: "inplay", zone: draft ? draft.zone : null, result: draft.result, answer: a }); };
+  const onAnswer = (a) => {
+    tap();
+    commit({
+      t: "inplay", zone: draft ? draft.zone : null,
+      ...(draft && draft.zone2 != null ? { zone2: draft.zone2 } : {}),
+      result: draft.result, answer: a,
+    });
+  };
 
   const backTarget = () => {
     switch (mode) {
@@ -780,8 +833,9 @@ export default function App() {
       case "no-ball": return "「打球以外」を取り消す";
       case "result": return "打球方向の選択に戻る";
       case "detail": return "結果の選択に戻る";
-      case "moves": return "結果の選択に戻る";
-      case "fielders": return "ランナーの行き先に戻る";
+      case "batted": return "結果の選択に戻る";
+      case "moves": return draft && asksBatted(draft.result) ? "打球の性質の選択に戻る" : "結果の選択に戻る";
+      case "fielders": return seqFor === "runner" ? "理由の選択に戻る" : "ランナーの行き先に戻る";
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
       case "runner-why": return "ランナーの選択を取り消す";
@@ -814,14 +868,16 @@ export default function App() {
       else if (mode === "no-ball") { setMode("pitch"); setDraft(null); }
       else if (mode === "result") { setMode("zone"); setDraft(null); }
       else if (mode === "detail") setMode("result");
+      else if (mode === "batted") { setDraft({ zone: draft.zone, zone2: draft.zone2 }); setMode("result"); }
       else if (mode === "fielders") { const to = seqFor === "runner" ? "runner-why" : "moves"; setSeq(null); setSeqFor("batted"); setMode(to); }
       else if (mode === "moves") {
         setMovesErr("");
         if (draft.zone == null) setMode("no-ball");
+        else if (asksBatted(draft.result)) { setDraft({ zone: draft.zone, zone2: draft.zone2, result: draft.result }); setMode("batted"); }
         else setMode(DETAIL_KEYS.has(draft.result) ? "detail" : "result");
       }
-      else if (mode === "question") { setQuestion(null); setDraft({ zone: draft.zone }); setMode("result"); }
-      else if (mode === "hold-note") { setNote(""); setDraft({ zone: draft.zone }); setMode("detail"); }
+      else if (mode === "question") { setQuestion(null); setDraft({ zone: draft.zone, zone2: draft.zone2 }); setMode("result"); }
+      else if (mode === "hold-note") { setNote(""); setDraft({ zone: draft.zone, zone2: draft.zone2 }); setMode("detail"); }
       else if (mode === "runner-why") { setDraft(null); setMode("pitch"); }
       else if (mode === "runner-detail") setMode("runner-why");
       else if (mode === "runner-far") { setQuestion(null); setMode("runner-why"); }
@@ -841,18 +897,18 @@ export default function App() {
        削除で終わらせず直前の選択画面まで戻す（§12.5） */
     if (last.t === "inplay") {
       if (last.answer != null) {
-        setDraft({ zone: last.zone, result: last.result });
+        setDraft({ zone: last.zone, zone2: last.zone2, result: last.result });
         setQuestion(questionFor(prev, last.zone, last.result));
         setMode("question");
       } else if (last.result === "保留") {
-        setDraft({ zone: last.zone, result: "保留" }); setNote(last.note || ""); setMode("hold-note");
+        setDraft({ zone: last.zone, zone2: last.zone2, result: "保留" }); setNote(last.note || ""); setMode("hold-note");
       } else {
         setQuestion(null);
         if (last.moves) {
-          setDraft({ zone: last.zone, result: last.result, moves: last.moves });
+          setDraft({ zone: last.zone, zone2: last.zone2, result: last.result, moves: last.moves, batted: last.batted });
           setMovesErr(""); setMode("moves");
         } else if (NO_BALL_KEYS.has(last.result)) { setDraft(null); setMode("no-ball"); }
-        else { setDraft({ zone: last.zone }); setMode(DETAIL_KEYS.has(last.result) ? "detail" : "result"); }
+        else { setDraft({ zone: last.zone, zone2: last.zone2 }); setMode(DETAIL_KEYS.has(last.result) ? "detail" : "result"); }
       }
       return;
     }
@@ -1105,7 +1161,7 @@ export default function App() {
 
         {mode === "result" && (
           <>
-            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>{POS[draft.zone]}への打球 — 結果は</div>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>{zoneName(draft.zone, draft.zone2)}への打球 — 結果は</div>
             {RESULT_GROUPS.map((g) => (
               <div key={g.label} style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>{g.label}</div>
@@ -1121,9 +1177,24 @@ export default function App() {
           </>
         )}
 
+        {mode === "batted" && (
+          <>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>
+              {zoneName(draft.zone, draft.zone2)}への{draft.result} — 打球は
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {BATTED_KINDS.map((k) => (<Btn key={k.k} onClick={() => onBatted(k.k)}>{k.l}</Btn>))}
+              <Btn tone="ghost" onClick={() => onBatted(null)}>書かない</Btn>
+            </div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
+              スコアブックでは数字に線を添えて書き分けます（ゴロ＝下に凵／フライ＝上に⌐／ライナー＝上に横線）
+            </div>
+          </>
+        )}
+
         {mode === "detail" && (
           <>
-            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>{POS[draft.zone]}への打球 — 詳細</div>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>{zoneName(draft.zone, draft.zone2)}への打球 — 詳細</div>
             {DETAIL_GROUPS.map((g) => (
               <div key={g.label} style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>{g.label}</div>
@@ -1138,7 +1209,7 @@ export default function App() {
         {mode === "hold-note" && (
           <>
             <div style={{ background: C.card, border: `2px solid ${C.red}`, borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 15 }}>
-              {draft.zone == null ? "あとで決める" : `${POS[draft.zone]}への打球 — あとで決める`}
+              {draft.zone == null ? "あとで決める" : `${zoneName(draft.zone, draft.zone2)}への打球 — あとで決める`}
               <div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>
                 何が起きたか、覚えているうちに残してください。空のままでも記録できます。
               </div>
@@ -1202,7 +1273,7 @@ export default function App() {
 
             <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>送球先を押して足す</div>
             <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.line}`, marginBottom: 10 }}>
-              <FieldPicker onPick={seqAdd} />
+              <FieldPicker onPick={seqAdd} gaps={false} />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 8 }}>
               <SmallBtn tone="warn" onClick={seqDrop}>最後を消す</SmallBtn>
@@ -1214,7 +1285,8 @@ export default function App() {
         {mode === "moves" && (
           <>
             <div style={{ fontSize: 15, marginBottom: 2 }}>
-              {draft.zone == null ? draft.result : `${POS[draft.zone]}への打球 ─ ${draft.result}`}
+              {draft.zone == null ? draft.result
+                : `${zoneName(draft.zone, draft.zone2)}への打球 ─ ${draft.batted ? draft.batted + "の" : ""}${draft.result}`}
             </div>
             <div style={{ fontSize: 12, color: C.dim, marginBottom: 10 }}>
               ランナーの行き先。このままでよければ下を押す
@@ -1235,7 +1307,8 @@ export default function App() {
                 <span style={{ fontSize: 12, color: C.sub }}>守備</span>
                 <b style={{ fontFamily: MONO, fontSize: 16 }}>
                   {fieldersNotation(draft.fielders ? { f: draft.fielders, errorAt: draft.errorAt, kind: draft.errorKind }
-                    : defaultFielders(draft.zone, draft.result, draft.moves))}
+                    : draft.zone2 != null ? { f: [], errorAt: null, kind: "" }
+                    : defaultFielders(draft.zone, draft.result, draft.moves)) || "—"}
                 </b>
                 <div style={{ marginLeft: "auto" }}><SmallBtn onClick={openSeq}>直す</SmallBtn></div>
               </div>

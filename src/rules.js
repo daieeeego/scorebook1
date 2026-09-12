@@ -15,6 +15,46 @@ export const POS = {
   6: "ショート", 7: "レフト", 8: "センター", 9: "ライト",
 };
 export const POSITIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/* 守備位置の「間」を抜けた打球。記法規約 §3 は番号を `.` で結ぶ（`7.8` = 左中間）。
+   イベントには zone に小さい方、zone2 に大きい方を入れて紙と同じ順に並べる。
+   間に落ちた打球は誰も正面で捕っていないため、関与順（6-3 など）は導出しない */
+export const GAPS = [
+  { a: 5, b: 6, l: "三遊間" },
+  { a: 4, b: 6, l: "二遊間" },
+  { a: 3, b: 4, l: "一二塁間" },
+  { a: 7, b: 8, l: "左中間" },
+  { a: 8, b: 9, l: "右中間" },
+];
+const GAP_LABEL = new Map(GAPS.map((g) => [`${g.a}.${g.b}`, g.l]));
+
+/** 打球方向の呼び名。間なら「左中間」、単独なら「センター」 */
+export function zoneName(zone, zone2) {
+  if (zone == null) return "";
+  if (zone2 == null) return POS[zone] || "";
+  const [a, b] = zone < zone2 ? [zone, zone2] : [zone2, zone];
+  return GAP_LABEL.get(`${a}.${b}`) || `${POS[a]}${POS[b]}の間`;
+}
+
+/** 記法規約 §3 の書き方。`8` または `7.8` */
+export function zoneNotation(zone, zone2) {
+  if (zone == null) return "";
+  if (zone2 == null) return String(zone);
+  const [a, b] = zone < zone2 ? [zone, zone2] : [zone2, zone];
+  return `${a}.${b}`;
+}
+
+/* 打球の性質。記法規約 §4 の補助線（ゴロ＝下に凵／フライ＝上に⌐／ライナー＝上に横線）。
+   ゴロアウトなどは結果の名前が性質を兼ねるが、安打や長打は名前に性質が入らないので
+   別に持たないと紙と同じ記号が書けない */
+export const BATTED_KINDS = [
+  { k: "ゴロ", l: "ゴロ" },
+  { k: "フライ", l: "フライ" },
+  { k: "ライナー", l: "ライナー" },
+];
+/* 性質を名前に含まない打者結果。これらだけ打球の性質を聞く */
+const BATTED_ASKS = new Set(["安打", "二塁打", "三塁打", "本塁打", "ランニングホームラン", "失策で出塁"]);
+export const asksBatted = (result) => BATTED_ASKS.has(result);
 export const BASE = ["一塁", "二塁", "三塁", "本塁"];
 export const SIDES = ["away", "home"];
 
@@ -205,11 +245,14 @@ export function defaultFielders(zone, result, moves) {
   return { f: [zone], errorAt, kind };
 }
 
-/** イベントに指定があればそれを、無ければ導出したものを返す */
+/** イベントに指定があればそれを、無ければ導出したものを返す。
+    守備位置の間を抜けた打球（zone2 あり）は正面で捕った者がいないので導出しない */
 export const fieldersOf = (e) =>
   (e.fielders && e.fielders.length
     ? { f: e.fielders, errorAt: e.errorAt == null ? null : e.errorAt, kind: e.errorKind || "" }
-    : defaultFielders(e.zone, e.result, e.moves));
+    : e.zone2 != null
+      ? { f: [], errorAt: null, kind: "" }
+      : defaultFielders(e.zone, e.result, e.moves));
 
 export const isHitLike = (r) => HIT_LIKE.has(r);
 export const isErrorLike = (r) => ERROR_LIKE.has(r);
@@ -602,7 +645,7 @@ export function applyEvent(prev, e) {
     creditHalf(s);
     countPitch(s);
     s.plateAppearances[num] = (s.plateAppearances[num] || 0) + 1;
-    const where = e.zone == null ? "" : POS[e.zone];
+    const where = zoneName(e.zone, e.zone2);
     const r = e.result;
     const mark = e._resolved ? "（確定）" : "";
 
@@ -613,7 +656,8 @@ export function applyEvent(prev, e) {
       const fText = fieldersNotation(seq);
       const { scored, out } = applyMoves(s, e.moves, num);
       const outNote = out.length ? ` ${out.map((x) => `#${uniformOf(x)}`).join("・")}アウト` : "";
-      const zoneNote = e.zone == null ? "" : `（${where}${fText && fText !== String(e.zone) ? ` ${fText}` : ""}）`;
+      const bText = e.batted ? ` ${e.batted}` : "";
+      const zoneNote = e.zone == null ? "" : `（${where}${fText && fText !== zoneNotation(e.zone, e.zone2) ? ` ${fText}` : ""}${bText}）`;
       push(s, `${t} ${r}${zoneNote}${outNote}${runsNote(scored)}${e.note ? " — " + e.note : ""}${mark}`,
         { src, pending: r === "保留" && !e._resolved });
       nextBatter(s);
