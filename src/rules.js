@@ -107,6 +107,11 @@ export const RUNNER_DETAIL = [
    始まることもあるので、初期値は消して組み直せるようにしてある */
 export const CATCHER_FIRST = new Set(["盗塁失敗"]);
 
+/* 送球が絡む進塁。紙は走者のマスにも `9E`（右翼手の失策で進塁）や
+   `2ET-3`（捕手の高投）を残すので、アウトでなくても送球の順を聞く。
+   盗塁・暴投・捕逸・ボークは送球が絡まないため聞かない */
+export const THROW_ADVANCE = new Set(["打球で進塁", "けん制の悪送球"]);
+
 /* 2つ以上進むことがある理由。盗塁は1つずつなので含めない */
 const MULTI_BASE_REASONS = new Set(["打球で進塁", "暴投", "捕逸", "けん制の悪送球"]);
 
@@ -217,13 +222,20 @@ const BATTER_OUT_ONLY = new Set(["ファールフライ", "インフィールド
 /* 打球ではないため、打球方向を記録しない */
 const NO_ZONE = new Set(["死球", "敬遠四球", "打撃妨害", "走塁妨害", "振り逃げ", "3バント失敗"]);
 
+/* 塁の記号（記法規約 §3）。野手が自分でベースを踏んでアウトにしたときに添える。
+   `3A` = 一塁手が捕って一塁を踏む。`3-1`（カバーの投手へ送球）とは別のプレー */
+export const BASE_TAGS = [
+  { k: "A", l: "一塁" }, { k: "B", l: "二塁" }, { k: "C", l: "三塁" }, { k: "D", l: "本塁" },
+];
+
 /** 守備の関与順を記法規約 §3 の形に組み立てる。
-    `6-3` / `5E-3`（サードのエラーから一塁へ） / `6ET-3`（悪送球・高投） */
+    `6-3` / `5E-3`（サードのエラーから一塁へ） / `6ET-3`（悪送球・高投） / `3A`（ベース踏） */
 export function fieldersNotation(seq) {
   if (!seq || !seq.f || !seq.f.length) return "";
-  return seq.f
+  const line = seq.f
     .map((n, i) => (i === seq.errorAt ? `${n}E${seq.kind || ""}` : String(n)))
     .join("-");
+  return line + (seq.base || "");
 }
 
 /* エラーの種類 → 記法規約 §6 の添え字 */
@@ -249,7 +261,7 @@ export function defaultFielders(zone, result, moves) {
     守備位置の間を抜けた打球（zone2 あり）は正面で捕った者がいないので導出しない */
 export const fieldersOf = (e) =>
   (e.fielders && e.fielders.length
-    ? { f: e.fielders, errorAt: e.errorAt == null ? null : e.errorAt, kind: e.errorKind || "" }
+    ? { f: e.fielders, errorAt: e.errorAt == null ? null : e.errorAt, kind: e.errorKind || "", base: e.touch || "" }
     : e.zone2 != null
       ? { f: [], errorAt: null, kind: "" }
       : defaultFielders(e.zone, e.result, e.moves));
@@ -1040,7 +1052,7 @@ export function scoreSheet(events, setup) {
   const cellFor = (st, side, order) => {
     const k = key(side, order, st.inning);
     if (!cells.has(k)) {
-      cells.set(k, { side, order, inning: st.inning, num: "", pitches: [], result: "", kind: "", runner: [], outs: "", scored: false });
+      cells.set(k, { side, order, inning: st.inning, num: "", pitches: [], result: "", kind: "", runner: [], outs: "", scored: false, scoredBy: null });
     }
     return cells.get(k);
   };
@@ -1069,9 +1081,11 @@ export function scoreSheet(events, setup) {
         /* 走者の記録は、その走者が出塁したマスへ入れる（記法規約 §1） */
         let target = null;
         for (const [, c] of [...cells].reverse()) if (c.num === uniformOf(rid) && c.side === side) { target = c; break; }
-        const mark = RUNNER_MARK[e.reason] || e.reason;
-        const via = e.fielders && e.fielders.length ? e.fielders.join("-") : "";
-        (target || cellFor(before, side, order)).runner.push(via ? `${via}${mark}` : mark);
+        /* 打球で進んだ場合、紙は理由を書かず守備の記号だけを残す（`9E (2)`）。
+           走者の記録には「何番バッターの時か」を必ず添える（記法規約 §7） */
+        const via = fieldersNotation(fieldersOf(e));
+        const mark = via && e.reason === "打球で進塁" ? "" : (RUNNER_MARK[e.reason] || e.reason);
+        (target || cellFor(before, side, order)).runner.push(`${via}${mark}(${order})`);
       }
     }
 
@@ -1120,7 +1134,9 @@ export function scoreSheet(events, setup) {
       const line = after.log[after.log.length - 1];
       const nums = (line && line.text.match(/#([^\s・]+)(?=[・]|生還)/g) || []).map((x) => x.replace("#", ""));
       for (const n of nums.slice(0, runs)) {
-        for (const [, c] of [...cells].reverse()) if (c.num === n && c.side === side && !c.scored) { c.scored = true; break; }
+        for (const [, c] of [...cells].reverse()) {
+          if (c.num === n && c.side === side && !c.scored) { c.scored = true; c.scoredBy = order; break; }
+        }
       }
     }
     s = after;
