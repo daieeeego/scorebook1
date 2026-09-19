@@ -1087,13 +1087,33 @@ export function scoreSheet(events, setup) {
       else if (line.includes("三振")) c.result = "K";
     }
 
-    /* アウトカウントは変化した瞬間のマスへ記す。3アウトでイニングが
-       終わると after.outs は 0 に戻るため、締めた回数で判定する */
+    /* アウトカウントは、アウトになった選手のマスへ記す。走者が刺された
+       ときは打者ではなく走者のマスに入る（記法規約 §1／紙と同じ）。
+       3アウトでイニングが終わると after.outs は 0 に戻るため、締めた回数で判定する */
     const halfEnded = after.isTop !== before.isTop || after.inning !== before.inning;
     const outsNow = halfEnded ? 3 : after.outs;
     if (outsNow > before.outs && e.t !== "sub") {
-      const c = cellFor(before, side, order);
-      c.outs = OUT_MARK[Math.min(outsNow, 3)] || c.outs;
+      /* アウトになった選手を並べる。走者が刺されたときは打者ではなく
+         その走者、併殺なら2人。打者は最後に置く */
+      const victims = [];
+      if (e.t === "runner" && e.from !== "all") victims.push(before.bases[e.from]);
+      else if (e.t === "inplay" && e.moves) {
+        for (const m of e.moves) if (m.to === -1 && m.from >= 0) victims.push(before.bases[m.from]);
+        if (e.moves.some((m) => m.to === -1 && m.from === -1)) victims.push(bid);
+      }
+      if (!victims.length) victims.push(bid);
+      /* 打者以外は、その選手が出塁した打席のマスへ */
+      const cellOf = (playerId) => {
+        if (!playerId || playerId === bid) return cellFor(before, side, order);
+        for (const [, x] of [...cells].reverse()) {
+          if (x.num === uniformOf(playerId) && x.side === side) return x;
+        }
+        return cellFor(before, side, order);
+      };
+      victims.slice(0, outsNow - before.outs).forEach((v, i) => {
+        const c = cellOf(v);
+        c.outs = OUT_MARK[Math.min(before.outs + i + 1, 3)] || c.outs;
+      });
     }
     if (after.score[side] > before.score[side]) {
       const runs = after.score[side] - before.score[side];
@@ -1194,3 +1214,157 @@ export function stampEvents(events, setup) {
   });
   return out;
 }
+
+/* ---------------- 集計欄（成美堂「保存版」の様式） ----------------
+   紙は右端に打者ごとの成績、下端にイニングごとの合計、最下部に投手表を持つ。
+   記録者が試合後に手で足している欄なので、イベント列から出せるものは出す。
+   出せないもの（氏名・打方・勝負・セーブ・自責点）は空のままにする。 */
+
+/* 打数に数えない打席結果。四死球・犠打犠飛・妨害は打席には数えるが打数には入らない */
+const NOT_AT_BAT = new Set(["死球", "敬遠四球", "犠牲バント", "犠牲フライ", "打撃妨害", "走塁妨害"]);
+const BB_LIKE = new Set(["死球", "敬遠四球"]);
+/* 打点にしない打席結果。失策や野手選択での生還は打点にならない */
+const NO_RBI = new Set(["失策で出塁", "ゴロエラー", "フライエラー", "悪送球（高投）", "悪送球（低投）", "野手選択"]);
+const SINGLE_LIKE = new Set(["安打", "バントヒット", "テキサスヒット"]);
+
+const batRec = () => ({
+  pa: 0, ab: 0, run: 0, h1: 0, h2: 0, h3: 0, hr: 0, rbi: 0,
+  sb: 0, cs: 0, sacB: 0, sacF: 0, bb: 0, so: 0, lob: 0,
+  po: 0, as: 0, err: 0, dp: 0,
+});
+const pitRec = () => ({
+  outs: 0, bf: 0, ab: 0, pitches: 0, h: 0, hr: 0, sacB: 0, sacF: 0,
+  bb: 0, hbp: 0, so: 0, wp: 0, bk: 0, runs: 0,
+});
+const inningRec = () => ({ h: 0, bb: 0, err: 0, run: 0, pitches: 0 });
+
+/** 守備番号を、その時点でその位置についている選手に読み替える */
+function fielderIds(s, side, seq) {
+  const on = activeEntries(s, side);
+  return (seq || []).map((n) => {
+    const e = on.find((x) => x.position === n);
+    return e ? e.playerId : null;
+  });
+}
+
+/** 右端・下端・投手表の中身。cells（scoreSheet）と対になる */
+export function sheetSummary(events, setup) {
+  const list = resolvedEvents(events);
+  let s = initialState(setup);
+  const bat = new Map();                 // playerId -> 打者成績＋守備記録
+  const pit = new Map();                 // playerId -> 投手成績
+  const inn = { away: new Map(), home: new Map() };   // side -> inning -> 合計
+  const B = (id) => { if (!bat.has(id)) bat.set(id, batRec()); return bat.get(id); };
+  const P = (id) => { if (!pit.has(id)) pit.set(id, pitRec()); return pit.get(id); };
+  const I = (side, i) => {
+    if (!inn[side].has(i)) inn[side].set(i, inningRec());
+    return inn[side].get(i);
+  };
+  let maxInning = 1;
+
+  for (const e of list) {
+    const before = s;
+    const side = batKey(before);
+    const foe = fieldKey(before);
+    const at = before.inning;
+    maxInning = Math.max(maxInning, at);
+    const bid = batterId(before);
+    const pid0 = pitcherIdOf(before, foe);
+    const after = applyEvent(before, e);
+
+    /* 投球数はイニングと投手の両方へ */
+    if (e.t === "pitch" || e.t === "inplay") {
+      I(foe, at).pitches += 1;
+      if (pid0) P(pid0).pitches += 1;
+    }
+
+    /* そのプレーで増えたアウト。3アウトで回が終わると after.outs は 0 に戻る */
+    const ended = after.isTop !== before.isTop || after.inning !== before.inning;
+    const outs = (ended ? 3 : after.outs) - before.outs;
+    if (pid0 && outs > 0) P(pid0).outs += outs;
+
+    /* 守備の記録。最後の野手が刺殺、手前が補殺、E のついた野手が失策 */
+    if (e.t === "inplay" || (e.t === "runner" && e.fielders)) {
+      const seq = fieldersOf(e);
+      const ids = fielderIds(before, foe, seq.f);
+      ids.forEach((id, i) => {
+        if (!id) return;
+        if (i === seq.errorAt) { B(id).err += 1; I(foe, at).err += 1; return; }
+        if (outs > 0 && i === ids.length - 1) B(id).po += 1;
+        else B(id).as += 1;
+        if (outs >= 2) B(id).dp += 1;
+      });
+    }
+
+    /* 得点した選手。ログの「#N生還」から拾う（applyMoves が書いている） */
+    if (after.score[side] > before.score[side]) {
+      const line = after.log[after.log.length - 1];
+      const nums = (line && line.text.match(/#([^\s・]+)(?=[・]|生還)/g) || []).map((x) => x.replace("#", ""));
+      const runs = after.score[side] - before.score[side];
+      I(side, at).run += runs;
+      if (pid0) P(pid0).runs += runs;
+      for (const n of nums.slice(0, runs)) {
+        const who = before.lineup[side]
+          .flatMap((slot) => slot.entries)
+          .find((x) => uniformOf(x.playerId) === n);
+        if (who) B(who.playerId).run += 1;
+      }
+      if (e.t === "inplay" && !NO_RBI.has(e.result) && bid) B(bid).rbi += runs;
+    }
+
+    if (e.t === "pitch" && bid) {
+      /* 投球で決着した打席。カウントが戻り、打者が変わったかで見分ける */
+      const done = after.balls === 0 && after.strikes === 0 && batterId(after) !== bid;
+      if (done) {
+        B(bid).pa += 1;
+        if (pid0) P(pid0).bf += 1;
+        if (outs > 0) {                       // 三振
+          B(bid).so += 1; B(bid).ab += 1;
+          if (pid0) { P(pid0).so += 1; P(pid0).ab += 1; }
+        } else {                              // 四球
+          B(bid).bb += 1; I(side, at).bb += 1;
+          if (pid0) P(pid0).bb += 1;
+        }
+      }
+    }
+
+    if (e.t === "inplay" && bid) {
+      const r = e.result;
+      const b = B(bid);
+      b.pa += 1;
+      if (pid0) P(pid0).bf += 1;
+      if (!NOT_AT_BAT.has(r)) { b.ab += 1; if (pid0) P(pid0).ab += 1; }
+      if (SINGLE_LIKE.has(r)) { b.h1 += 1; I(side, at).h += 1; if (pid0) P(pid0).h += 1; }
+      else if (r === "二塁打") { b.h2 += 1; I(side, at).h += 1; if (pid0) P(pid0).h += 1; }
+      else if (r === "三塁打") { b.h3 += 1; I(side, at).h += 1; if (pid0) P(pid0).h += 1; }
+      else if (HR_LIKE.has(r)) {
+        b.hr += 1; I(side, at).h += 1;
+        if (pid0) { P(pid0).h += 1; P(pid0).hr += 1; }
+      }
+      if (BB_LIKE.has(r)) { b.bb += 1; I(side, at).bb += 1; if (pid0) P(pid0)[r === "死球" ? "hbp" : "bb"] += 1; }
+      if (r === "犠牲バント") { b.sacB += 1; if (pid0) P(pid0).sacB += 1; }
+      if (r === "犠牲フライ") { b.sacF += 1; if (pid0) P(pid0).sacF += 1; }
+      if (r === "3バント失敗" || r === "振り逃げ") { b.so += 1; if (pid0) P(pid0).so += 1; }
+    }
+
+    if (e.t === "runner" && e.from !== "all") {
+      const rid = before.bases[e.from];
+      if (rid) {
+        if (e.reason === "盗塁") B(rid).sb += 1;
+        if (e.reason === "盗塁失敗" || e.reason === "けん制でアウト") B(rid).cs += 1;
+      }
+      if (pid0 && e.reason === "暴投") P(pid0).wp += 1;
+      if (pid0 && e.reason === "ボーク") P(pid0).bk += 1;
+    }
+
+    s = after;
+  }
+
+  /* 残塁は盤面が数えている（FR-38） */
+  for (const [id, n] of Object.entries(s.lobCount || {})) B(id).lob = n;
+
+  return { bat, pit, inn, maxInning: Math.max(maxInning, s.inning), state: s };
+}
+
+/** 投球回。アウト数を「回 と 1/3」の形にする */
+export const inningsPitched = (outs) => `${Math.floor(outs / 3)}${outs % 3 ? ` ${outs % 3}/3` : ""}`;
