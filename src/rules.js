@@ -114,8 +114,17 @@ export const THROW_ADVANCE = new Set(["打球で進塁", "けん制の悪送球"
 
 /* 投球と同時に起きる走者のプレー。紙は必ずその1球も書く。
    投球を別に押させると押し忘れて投球数が落ちるので、走者の入力に組み込む。
-   けん制とボークは投球ではないため含めない */
-export const ON_PITCH_REASONS = new Set(["盗塁", "盗塁失敗", "暴投", "捕逸"]);
+
+   ボークを入れているのは、全軟連 学童部の規定が
+   「ボークにかかわらず投球したものは、投球数に数える」と定めているため
+   （競技に関する連盟特別規則 8.投球制限 ③）。投球を伴わないボークもあるので、
+   数えるかどうかはその場で選ぶ。
+   けん制は「牽制球や送球とみなされるものは投球数としない」（同 ⑤）ため入れない */
+export const ON_PITCH_REASONS = new Set(["盗塁", "盗塁失敗", "暴投", "捕逸", "ボーク"]);
+
+/* 投球を伴わない打者結果。申告敬遠は1球も投げないので投球数に数えない。
+   投げて歩かせた場合は1球ずつ入力されるため、ここで数えると二重になる */
+const NO_PITCH_RESULT = new Set(["敬遠四球"]);
 
 /* 2つ以上進むことがある理由。盗塁は1つずつなので含めない */
 const MULTI_BASE_REASONS = new Set(["打球で進塁", "暴投", "捕逸", "けん制の悪送球"]);
@@ -660,7 +669,7 @@ export function applyEvent(prev, e) {
 
   if (e.t === "inplay") {
     creditHalf(s);
-    countPitch(s);
+    if (!NO_PITCH_RESULT.has(e.result)) countPitch(s);
     s.plateAppearances[num] = (s.plateAppearances[num] || 0) + 1;
     const where = zoneName(e.zone, e.zone2);
     const r = e.result;

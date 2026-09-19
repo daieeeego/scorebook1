@@ -1181,7 +1181,9 @@ export default function App() {
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
       case "runner-why": return "ランナーの選択を取り消す";
-      case "runner-pitch": return draft && draft.viaWhy ? "理由の選択に戻る" : "ランナーの選択を取り消す";
+      case "runner-pitch":
+        if (!draft || !draft.viaWhy) return "ランナーの選択を取り消す";
+        return RUNNER_DETAIL_KEYS.has(draft.reason.k) ? "詳細の選択に戻る" : "理由の選択に戻る";
       case "runner-detail": return "理由の選択に戻る";
       case "runner-far": return "理由の選択に戻る";
       default: {
@@ -1227,8 +1229,8 @@ export default function App() {
       else if (mode === "runner-why") { setDraft(null); setMode("pitch"); }
       else if (mode === "runner-detail") setMode("runner-why");
       else if (mode === "runner-pitch") {
-        if (draft.viaWhy) setMode("runner-why");
-        else { setDraft(null); setMode("pitch"); }
+        if (!draft.viaWhy) { setDraft(null); setMode("pitch"); }
+        else setMode(RUNNER_DETAIL_KEYS.has(draft.reason.k) ? "runner-detail" : "runner-why");
       }
       else if (mode === "runner-far") { setQuestion(null); setMode("runner-why"); }
       return;
