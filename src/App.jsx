@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import {
   POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS,
   GAPS, BATTED_KINDS, asksBatted, zoneName, BASE_TAGS,
-  RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, CATCHER_FIRST, THROW_ADVANCE,
+  RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, CATCHER_FIRST, THROW_ADVANCE, ON_PITCH_REASONS,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
   swapSides, ownSideOf, oppSideOf, HHMM, scoreSheet,
   deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
@@ -661,6 +661,7 @@ const HDR1 = 44, HDR2 = 26;   // 見出し2段。縦書き3文字が入る高さ
 const n0 = (v) => (v ? String(v) : "");
 /* 得点は「何番バッターの時か」を丸数字で書く（記法規約 §7 の ④） */
 const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"];
+const STEAL = RUNNER_REASONS.find((r) => r.k === "盗塁");
 
 /** 1マス。投球・ダイヤ・打者結果・走者・アウトカウント・得点（記法規約 §1） */
 function PaperCell({ c }) {
@@ -1004,15 +1005,20 @@ export default function App() {
     if (!setup.startedAt) setSetup((s0) => ({ ...s0, startedAt: new Date().toISOString() }));
   };
 
-  const commit = (ev) => {
+  const commitAll = (evs) => {
     stampStart();
-    setEvents((e) => [...e, ev]);
+    setEvents((e) => [...e, ...evs]);
     setPlays((p) => p + 1);
     setTapsThis(0);
     setMode("pitch");
     setDraft(null);
     setQuestion(null);
   };
+  const commit = (ev) => commitAll([ev]);
+
+  /* 走者のイベントは、投球と同時に起きたものなら1球を先に置く。
+     3アウト目が走者のアウトの場合、球を後ろに付けると次の回に入ってしまう */
+  const commitRunner = (d, ev) => commitAll(d && d.pitch ? [{ t: "pitch", r: d.pitch }, ev] : [ev]);
 
   /* ベンチ操作（交代・保留の確定）はプレー入力ではないため計測に含めない */
   const commitBench = (ev) => { stampStart(); setEvents((e) => [...e, ev]); };
@@ -1039,23 +1045,31 @@ export default function App() {
     setMode("fielders");
   };
 
-  const onRunnerWhy = (r) => {
-    tap();
-    /* アウトになった走者は、誰が刺したかを記録する。挟殺なら送球が何度も続く */
-    if (r.out) {
-      openRunnerSeq({ ...draft, reason: r }, CATCHER_FIRST.has(r.k) ? [2] : []);
-      return;
-    }
-    const q = runnerQuestionFor(state, draft.from, r.k);
-    if (q) { setDraft({ ...draft, reason: r }); setQuestion(q); setMode("runner-far"); return; }
-    if (THROW_ADVANCE.has(r.k)) { openRunnerSeq({ ...draft, reason: r }); return; }
-    commit({ t: "runner", from: draft.from, reason: r.k, out: r.out });
+  /* 盗塁・暴投などは投球と同時に起きる。1球を押し忘れると投球数が落ちるため、
+     走者の入力の最初にその1球を聞く（FR-46） */
+  const startRunner = (d) => {
+    if (ON_PITCH_REASONS.has(d.reason.k)) { setDraft(d); setMode("runner-pitch"); return; }
+    afterRunnerPitch(d);
   };
+
+  const onRunnerPitch = (r) => { tap(); afterRunnerPitch({ ...draft, pitch: r }); };
+
+  const afterRunnerPitch = (d) => {
+    const r = d.reason;
+    /* アウトになった走者は、誰が刺したかを記録する。挟殺なら送球が何度も続く */
+    if (r.out) { openRunnerSeq(d, CATCHER_FIRST.has(r.k) ? [2] : []); return; }
+    const q = runnerQuestionFor(state, d.from, r.k);
+    if (q) { setDraft(d); setQuestion(q); setMode("runner-far"); return; }
+    if (THROW_ADVANCE.has(r.k)) { openRunnerSeq(d); return; }
+    commitRunner(d, { t: "runner", from: d.from, reason: r.k, out: r.out });
+  };
+
+  const onRunnerWhy = (r) => { tap(); startRunner({ ...draft, reason: r, viaWhy: true }); };
 
   const onRunnerFar = (o) => {
     tap();
     if (THROW_ADVANCE.has(draft.reason.k)) { openRunnerSeq({ ...draft, to: o.to }); return; }
-    commit({ t: "runner", from: draft.from, reason: draft.reason.k, out: false, to: o.to });
+    commitRunner(draft, { t: "runner", from: draft.from, reason: draft.reason.k, out: false, to: o.to });
   };
 
   const onZone = (z, z2) => {
@@ -1112,7 +1126,7 @@ export default function App() {
   const seqDone = () => {
     tap();
     if (seqFor === "runner") {
-      commit({
+      commitRunner(draft, {
         t: "runner", from: draft.from, reason: draft.reason.k, out: !!draft.reason.out,
         ...(draft.to != null ? { to: draft.to } : {}),
         ...(seq.f.length ? { fielders: seq.f, errorAt: seq.errorAt, errorKind: seq.kind } : {}),
@@ -1167,6 +1181,7 @@ export default function App() {
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
       case "runner-why": return "ランナーの選択を取り消す";
+      case "runner-pitch": return draft && draft.viaWhy ? "理由の選択に戻る" : "ランナーの選択を取り消す";
       case "runner-detail": return "理由の選択に戻る";
       case "runner-far": return "理由の選択に戻る";
       default: {
@@ -1211,6 +1226,10 @@ export default function App() {
       else if (mode === "hold-note") { setNote(""); setDraft({ zone: draft.zone, zone2: draft.zone2 }); setMode("detail"); }
       else if (mode === "runner-why") { setDraft(null); setMode("pitch"); }
       else if (mode === "runner-detail") setMode("runner-why");
+      else if (mode === "runner-pitch") {
+        if (draft.viaWhy) setMode("runner-why");
+        else { setDraft(null); setMode("pitch"); }
+      }
       else if (mode === "runner-far") { setQuestion(null); setMode("runner-why"); }
       return;
     }
@@ -1409,7 +1428,7 @@ export default function App() {
                     <span style={{ fontSize: 14, width: 78 }}>
                       {BASE[r.base]}<b style={{ fontFamily: MONO, marginLeft: 4 }}>#{r.num}</b>
                     </span>
-                    <SmallBtn onClick={() => { tap(); commit({ t: "runner", from: r.base, reason: "盗塁", out: false }); }}>盗塁</SmallBtn>
+                    <SmallBtn onClick={() => { tap(); startRunner({ from: r.base, reason: STEAL }); }}>盗塁</SmallBtn>
                     <SmallBtn onClick={() => { tap(); setDraft({ from: r.base }); setMode("runner-why"); }}>その他</SmallBtn>
                   </div>
                 ))}
@@ -1435,6 +1454,25 @@ export default function App() {
                 </div>
               </div>
             ))}
+          </>
+        )}
+
+        {mode === "runner-pitch" && (
+          <>
+            <div style={{ fontSize: 14, color: C.sub, marginBottom: 8 }}>
+              {draft.from === "all" ? "ランナー全員" : `${BASE[draft.from]}ランナー`} ─ {draft.reason.l}。この時の1球は
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {PITCH_OPTIONS.map((o) => (
+                <Btn key={o.k} tone="ghost" onClick={() => onRunnerPitch(o.k)}>{o.l}</Btn>
+              ))}
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <Btn tone="warn" onClick={() => onRunnerPitch(null)}>この1球はもう入れた</Btn>
+            </div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
+              盗塁は投球と同時に起きます。ここで1球も一緒に記録すると、投球数が紙と合います
+            </div>
           </>
         )}
 
