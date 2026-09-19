@@ -1468,10 +1468,11 @@ export default function App() {
               ))}
             </div>
             <div style={{ marginTop: 12 }}>
-              <Btn tone="warn" onClick={() => onRunnerPitch(null)}>この1球はもう入れた</Btn>
+              <Btn tone="warn" onClick={() => onRunnerPitch(null)}>1球を数えない</Btn>
             </div>
             <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
-              盗塁は投球と同時に起きます。ここで1球も一緒に記録すると、投球数が紙と合います
+              投球数はキャッチャーへ投げた球だけを数えます。けん制の間に走った場合や、
+              先に投球を押してある場合は「1球を数えない」を押してください
             </div>
           </>
         )}
