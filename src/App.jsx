@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS,
-  GAPS, BATTED_KINDS, asksBatted, zoneName,
-  RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, CATCHER_FIRST,
+  GAPS, BATTED_KINDS, asksBatted, zoneName, BASE_TAGS,
+  RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, CATCHER_FIRST, THROW_ADVANCE,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
   swapSides, ownSideOf, oppSideOf, HHMM, scoreSheet,
   deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
@@ -659,6 +659,8 @@ const vert = {
 };
 const HDR1 = 44, HDR2 = 26;   // 見出し2段。縦書き3文字が入る高さ
 const n0 = (v) => (v ? String(v) : "");
+/* 得点は「何番バッターの時か」を丸数字で書く（記法規約 §7 の ④） */
+const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"];
 
 /** 1マス。投球・ダイヤ・打者結果・走者・アウトカウント・得点（記法規約 §1） */
 function PaperCell({ c }) {
@@ -689,7 +691,9 @@ function PaperCell({ c }) {
           </div>
         )}
         {c && c.scored && (
-          <div style={{ position: "absolute", left: 9, bottom: 0, width: IW - 10, textAlign: "center", fontSize: 8 }}>●</div>
+          <div style={{ position: "absolute", left: 9, bottom: 0, width: IW - 10, textAlign: "center", fontSize: 9, fontWeight: 700 }}>
+            {c.scoredBy ? CIRCLED[c.scoredBy - 1] : "●"}
+          </div>
         )}
       </div>
     </td>
@@ -1026,23 +1030,31 @@ export default function App() {
     .filter(Boolean);
 
 
+  /* 送球の順を書く進塁。紙は走者のマスにも `9E` や `2ET-3` を残す（記法規約 §7）。
+     盗塁や暴投は送球が絡まないので聞かない */
+  const openRunnerSeq = (d, seed) => {
+    setDraft(d);
+    setSeq({ f: seed || [], errorAt: null, kind: "", base: "" });
+    setSeqFor("runner");
+    setMode("fielders");
+  };
+
   const onRunnerWhy = (r) => {
     tap();
     /* アウトになった走者は、誰が刺したかを記録する。挟殺なら送球が何度も続く */
     if (r.out) {
-      setDraft({ ...draft, reason: r });
-      setSeq({ f: CATCHER_FIRST.has(r.k) ? [2] : [], errorAt: null, kind: "" });
-      setSeqFor("runner");
-      setMode("fielders");
+      openRunnerSeq({ ...draft, reason: r }, CATCHER_FIRST.has(r.k) ? [2] : []);
       return;
     }
     const q = runnerQuestionFor(state, draft.from, r.k);
     if (q) { setDraft({ ...draft, reason: r }); setQuestion(q); setMode("runner-far"); return; }
+    if (THROW_ADVANCE.has(r.k)) { openRunnerSeq({ ...draft, reason: r }); return; }
     commit({ t: "runner", from: draft.from, reason: r.k, out: r.out });
   };
 
   const onRunnerFar = (o) => {
     tap();
+    if (THROW_ADVANCE.has(draft.reason.k)) { openRunnerSeq({ ...draft, to: o.to }); return; }
     commit({ t: "runner", from: draft.from, reason: draft.reason.k, out: false, to: o.to });
   };
 
@@ -1083,9 +1095,12 @@ export default function App() {
      初期値は導出結果なので、足りないところだけ触ればよい */
   const openSeq = () => {
     tap();
-    setSeq(seq || (draft.zone2 != null
-      ? { f: [], errorAt: null, kind: "" }
-      : defaultFielders(draft.zone, draft.result, draft.moves)));
+    setSeq(seq || {
+      ...(draft.zone2 != null
+        ? { f: [], errorAt: null, kind: "" }
+        : defaultFielders(draft.zone, draft.result, draft.moves)),
+      base: draft.touch || "",
+    });
     setSeqFor("batted");
     setMode("fielders");
   };
@@ -1093,17 +1108,20 @@ export default function App() {
   const seqDrop = () => { tap(); setSeq((q) => ({ ...q, f: q.f.slice(0, -1), errorAt: q.errorAt != null && q.errorAt >= q.f.length - 1 ? null : q.errorAt })); };
   const seqError = (i) => { tap(); setSeq((q) => ({ ...q, errorAt: q.errorAt === i ? null : i, kind: q.errorAt === i ? "" : q.kind })); };
   const seqKind = (k) => { tap(); setSeq((q) => ({ ...q, kind: q.kind === k ? "" : k })); };
+  const seqBase = (k) => { tap(); setSeq((q) => ({ ...q, base: q.base === k ? "" : k })); };
   const seqDone = () => {
     tap();
     if (seqFor === "runner") {
       commit({
-        t: "runner", from: draft.from, reason: draft.reason.k, out: true,
+        t: "runner", from: draft.from, reason: draft.reason.k, out: !!draft.reason.out,
+        ...(draft.to != null ? { to: draft.to } : {}),
         ...(seq.f.length ? { fielders: seq.f, errorAt: seq.errorAt, errorKind: seq.kind } : {}),
+        ...(seq.base ? { touch: seq.base } : {}),
       });
       setSeq(null); setSeqFor("batted");
       return;
     }
-    setDraft((d) => ({ ...d, fielders: seq.f, errorAt: seq.errorAt, errorKind: seq.kind }));
+    setDraft((d) => ({ ...d, fielders: seq.f, errorAt: seq.errorAt, errorKind: seq.kind, touch: seq.base || "" }));
     setMode("moves");
   };
 
@@ -1122,6 +1140,7 @@ export default function App() {
       result: draft.result, moves: draft.moves,
       ...(draft.batted ? { batted: draft.batted } : {}),
       ...(draft.fielders ? { fielders: draft.fielders, errorAt: draft.errorAt, errorKind: draft.errorKind } : {}),
+      ...(draft.touch ? { touch: draft.touch } : {}),
     });
   };
 
@@ -1142,7 +1161,9 @@ export default function App() {
       case "detail": return "結果の選択に戻る";
       case "batted": return "結果の選択に戻る";
       case "moves": return draft && asksBatted(draft.result) ? "打球の性質の選択に戻る" : "結果の選択に戻る";
-      case "fielders": return seqFor === "runner" ? "理由の選択に戻る" : "ランナーの行き先に戻る";
+      case "fielders":
+        if (seqFor !== "runner") return "ランナーの行き先に戻る";
+        return draft && draft.to != null ? "進塁先の選択に戻る" : "理由の選択に戻る";
       case "question": return "結果の選択に戻る";
       case "hold-note": return "結果の選択に戻る";
       case "runner-why": return "ランナーの選択を取り消す";
@@ -1176,7 +1197,10 @@ export default function App() {
       else if (mode === "result") { setMode("zone"); setDraft(null); }
       else if (mode === "detail") setMode("result");
       else if (mode === "batted") { setDraft({ zone: draft.zone, zone2: draft.zone2 }); setMode("result"); }
-      else if (mode === "fielders") { const to = seqFor === "runner" ? "runner-why" : "moves"; setSeq(null); setSeqFor("batted"); setMode(to); }
+      else if (mode === "fielders") {
+        const to = seqFor !== "runner" ? "moves" : draft.to != null ? "runner-far" : "runner-why";
+        setSeq(null); setSeqFor("batted"); setMode(to);
+      }
       else if (mode === "moves") {
         setMovesErr("");
         if (draft.zone == null) setMode("no-ball");
@@ -1579,6 +1603,23 @@ export default function App() {
                   ))}
                 </div>
               )}
+              {seq.f.length > 0 && (
+                <>
+                  <div style={{ fontSize: 11, color: C.dim, marginTop: 10 }}>
+                    最後の野手が自分でベースを踏んだ場合は、その塁を押す（`3A` など）
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                    {BASE_TAGS.map((t) => (
+                      <button key={t.k} onClick={() => seqBase(t.k)}
+                        style={{
+                          minHeight: 44, padding: "0 12px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                          background: seq.base === t.k ? C.ink : C.card, color: seq.base === t.k ? "#fff" : C.ink,
+                          border: `2px solid ${seq.base === t.k ? C.ink : C.line}`,
+                        }}>{t.l}を踏む</button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
 
             <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>送球先を押して足す</div>
@@ -1616,7 +1657,7 @@ export default function App() {
               <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 12px" }}>
                 <span style={{ fontSize: 12, color: C.sub }}>守備</span>
                 <b style={{ fontFamily: MONO, fontSize: 16 }}>
-                  {fieldersNotation(draft.fielders ? { f: draft.fielders, errorAt: draft.errorAt, kind: draft.errorKind }
+                  {fieldersNotation(draft.fielders ? { f: draft.fielders, errorAt: draft.errorAt, kind: draft.errorKind, base: draft.touch }
                     : draft.zone2 != null ? { f: [], errorAt: null, kind: "" }
                     : defaultFielders(draft.zone, draft.result, draft.moves)) || "—"}
                 </b>
