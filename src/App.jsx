@@ -485,7 +485,7 @@ function GradeTab({ state, grades, onGrades }) {
   return (
     <>
       <div style={{ fontSize: 13, color: C.sub, marginBottom: 8, lineHeight: 1.7 }}>
-        学童の投球数の上限は <b>70球</b>、<b>4年生以下は60球</b>です（全軟連 競技に関する連盟特別規則 8.投球制限 ①）。
+        学童の投球数の上限は <b>70球</b>、<b>4年生以下は60球</b>です（全軟連 競技に関する連盟特別規則《学童部》7 ①）。
         学年はメンバー表に書かないので、ここで背番号に紐づけておくと、次の試合からも上限が出ます。
       </div>
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, marginBottom: 12 }}>
@@ -998,8 +998,8 @@ function ScoreSheet({ setup, events, grades = {}, onClose }) {
       <div className="sheet-wrap" style={{ overflowX: "auto", padding: 8 }}>
         {sides.map((s, i) => page(s, i))}
         <div className="no-print" style={{ fontSize: 11, color: C.sub, lineHeight: 1.7, width: PW, marginTop: 8 }}>
-          投球数の欄は「投じた球数／上限」。上限は全軟連 競技に関する連盟特別規則 8.投球制限 ① の
-          70球（4年生以下60球）で、学年を登録した自チームの投手にだけ出ます。
+          投球数の欄は「投じた球数／上限」。上限は全軟連 競技に関する連盟特別規則《学童部》7 ① の
+          1試合かつ1日70球（4年生以下60球）で、学年を登録した自チームの投手にだけ出ます。
           <br />
           成美堂スポーツ出版「野球スコアブック 保存版」（補充用紙 9107）の様式。A4横・1ページ1チーム。
           左の細い列が投球（●ボール ○見逃し ×空振り ―ファール）。数字の下線がゴロ、上線がフライ・ライナー。
