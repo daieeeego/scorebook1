@@ -1064,6 +1064,7 @@ function resultMark(e) {
   if (e.result === "二塁打") return `${seq} 2B`;
   if (e.result === "三塁打") return `${seq} 3B`;
   if (HR_LIKE.has(e.result)) return `${pre} ${seq}`;
+  if (e.result === "ファールフライ") return `${seq}${pre}`;          // `3F`（記法規約 §5）
   if (pre && (e.result === "犠牲フライ" || e.result === "犠牲バント")) return `${pre}${seq}`;
   if (pre) return `${pre} ${seq}`;
   if (ERROR_LIKE.has(e.result)) return seq;              // 5E-3 などは既に E を含む
@@ -1121,7 +1122,8 @@ export function scoreSheet(events, setup) {
 
     /* 投球で決着した打席（四球・三振）もマスに入れる */
     if (e.t === "pitch" && after.log.length > before.log.length) {
-      const line = after.log[after.log.length - 1].text;
+      /* その投球が生んだ最初の行を見る。3アウト目だと後ろに残塁の行が足される */
+      const line = after.log[before.log.length].text;
       const c = cellFor(before, side, order);
       if (line.includes("四球")) c.result = "H";
       else if (line.includes("K 見逃し三振")) c.result = "K";
@@ -1316,9 +1318,10 @@ export function sheetSummary(events, setup) {
     const pid0 = pitcherIdOf(before, foe);
     const after = applyEvent(before, e);
 
-    /* 投球数はイニングと投手の両方へ */
+    /* 投球数の行は、そのページの打者が受けた球数。マスに並ぶ投球記号の合計と一致する。
+       投手ごとの球数は投手表が持つので、こちらは攻撃側のイニングに積む */
     if (e.t === "pitch" || e.t === "inplay") {
-      I(foe, at).pitches += 1;
+      I(side, at).pitches += 1;
       if (pid0) P(pid0).pitches += 1;
     }
 
