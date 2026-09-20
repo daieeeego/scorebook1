@@ -1093,6 +1093,10 @@ export default function App() {
     setMode("pitch");
     setDraft(null);
     setQuestion(null);
+    /* 送球の順を次のプレーへ持ち越さない。残っていると「直す」が前の打席の
+       関与順から始まり、足した番号がつながってしまう */
+    setSeq(null);
+    setSeqFor("batted");
   };
   const commit = (ev) => commitAll([ev]);
 
