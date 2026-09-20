@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   POS, POSITIONS, BASE, SIDES, HOLD_PRESETS, PITCH_OPTIONS,
-  GAPS, BATTED_KINDS, asksBatted, zoneName, BASE_TAGS,
+  GAPS, BATTED_KINDS, asksBatted, zoneName, BASE_TAGS, GRADES, pitchLimit,
   RUNNER_REASONS, RUNNER_DETAIL, RUNNER_DETAIL_KEYS, CATCHER_FIRST, THROW_ADVANCE, ON_PITCH_REASONS,
   RESULT_GROUPS, DETAIL_GROUPS, DETAIL_KEYS, NO_BALL_GROUPS, NO_BALL_KEYS, RESOLVABLE,
   swapSides, ownSideOf, oppSideOf, HHMM, scoreSheet,
@@ -18,6 +18,19 @@ const C = {
 };
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
 const SAVE_KEY = "scorebook.v1";
+/* 選手マスタ。学年はメンバー表に書かないので、背番号に紐づけて端末に残す。
+   試合の保存とは別のキーにして、「新しい試合」で消えないようにする（FR-47） */
+const ROSTER_KEY = "scorebook.roster.v1";
+
+function loadRoster() {
+  try {
+    const raw = localStorage.getItem(ROSTER_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+function saveRoster(g) {
+  try { localStorage.setItem(ROSTER_KEY, JSON.stringify(g)); } catch { /* 容量超過等は無視 */ }
+}
 
 const defaultSetup = () => ({
   date: new Date().toISOString().slice(0, 10),
@@ -461,7 +474,48 @@ function SubHistory({ state }) {
   );
 }
 
-function StatsTab({ state }) {
+/* 学年の登録。上限を 70／60 のどちらにするかを決めるためだけに持つ。
+   氏名は登録しない方針（FR-14）だが、学年は個人を特定しないので保持する */
+function GradeTab({ state, grades, onGrades }) {
+  const own = ownSideOf(state.setup);
+  const nums = [...new Set(state.lineup[own].flatMap((s) => s.entries.map((e) => uniformOf(e.playerId))))];
+  const extra = Object.keys(grades).filter((n) => !nums.includes(n));
+  const row = { display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderBottom: `1px solid ${C.line}` };
+
+  return (
+    <>
+      <div style={{ fontSize: 13, color: C.sub, marginBottom: 8, lineHeight: 1.7 }}>
+        学童の投球数の上限は <b>70球</b>、<b>4年生以下は60球</b>です（全軟連 競技に関する連盟特別規則 8.投球制限 ①）。
+        学年はメンバー表に書かないので、ここで背番号に紐づけておくと、次の試合からも上限が出ます。
+      </div>
+      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, marginBottom: 12 }}>
+        {[...nums, ...extra].map((n) => {
+          const g = grades[n] ?? null;
+          return (
+            <div key={n} style={row}>
+              <b style={{ fontFamily: MONO, width: 52 }}>#{n}</b>
+              <select value={g ?? ""} onChange={(e) => onGrades({ ...grades, [n]: e.target.value ? Number(e.target.value) : undefined })}
+                style={{ ...fieldStyle, minHeight: 44, flex: 1 }}>
+                <option value="">学年 未設定</option>
+                {GRADES.map((x) => <option key={x} value={x}>{x}年生</option>)}
+              </select>
+              <span style={{ fontSize: 13, color: pitchLimit(g) ? C.ink : C.dim, width: 64, textAlign: "right" }}>
+                {pitchLimit(g) ? `${pitchLimit(g)}球` : "上限なし"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11, color: C.dim, lineHeight: 1.7 }}>
+        登録するのは自チームだけです。相手チームの学年は分からないため、上限は出しません。
+        <br />
+        この登録は試合の記録とは別に残ります。「新しい試合」で消えません。
+      </div>
+    </>
+  );
+}
+
+function StatsTab({ state, grades }) {
   const stats = useMemo(() => statsFrom(state), [state]);
   const row = { display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 8, alignItems: "center", padding: "6px 8px", borderBottom: `1px dotted ${C.line}`, fontSize: 14 };
 
@@ -469,7 +523,7 @@ function StatsTab({ state }) {
     <>
       <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>投手別 投球数</div>
       <div style={{ fontSize: 11, color: C.dim, marginBottom: 4 }}>
-        学童の上限は1試合かつ1日70球（4年生以下は60球）
+        学童の上限は1試合かつ1日70球（4年生以下は60球）。学年は「学年」タブで登録します
       </div>
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, marginBottom: 16 }}>
         {stats.pitchers.length === 0
@@ -479,7 +533,15 @@ function StatsTab({ state }) {
               <b style={{ fontFamily: MONO }}>#{p.uniformNumber}</b>
               <span style={{ fontSize: 12, color: C.sub }}>{state.setup.teamName[p.side]}</span>
               <span style={{ fontSize: 12, color: C.sub }}>投球回 {p.halves}</span>
-              <b style={{ fontFamily: MONO, fontSize: 18 }}>{p.pitches}球</b>
+              {(() => {
+                const lim = p.side === ownSideOf(state.setup) ? pitchLimit((grades || {})[p.uniformNumber]) : null;
+                const over = lim != null && p.pitches >= lim;
+                return (
+                  <b style={{ fontFamily: MONO, fontSize: 18, color: over ? C.red : C.ink }}>
+                    {p.pitches}{lim != null && <span style={{ fontSize: 13 }}> / {lim}</span>}球
+                  </b>
+                );
+              })()}
             </div>
           ))}
       </div>
@@ -589,11 +651,12 @@ function PendingTab({ state, events, setup, onResolve }) {
   );
 }
 
-function Sheet({ state, events, setup, onClose, onCommit }) {
+function Sheet({ state, events, setup, onClose, onCommit, grades, onGrades }) {
   const [tab, setTab] = useState("lineup");
   const tabs = [
     { k: "lineup", l: "交代・守備" },
     { k: "stats", l: "出場・投球数" },
+    { k: "grade", l: "学年" },
     { k: "pending", l: "保留" },
   ];
   const pendCount = state.log.filter((l) => l.pending).length;
@@ -623,7 +686,8 @@ function Sheet({ state, events, setup, onClose, onCommit }) {
 
         <div style={{ padding: 12 }}>
           {tab === "lineup" && <LineupTab state={state} onCommit={onCommit} />}
-          {tab === "stats" && <StatsTab state={state} />}
+          {tab === "stats" && <StatsTab state={state} grades={grades} />}
+          {tab === "grade" && <GradeTab state={state} grades={grades} onGrades={onGrades} />}
           {tab === "pending" && <PendingTab state={state} events={events} setup={setup} onResolve={onCommit} />}
         </div>
       </div>
@@ -701,7 +765,7 @@ function PaperCell({ c }) {
   );
 }
 
-function ScoreSheet({ setup, events, onClose }) {
+function ScoreSheet({ setup, events, grades = {}, onClose }) {
   const { cells } = useMemo(() => scoreSheet(events, setup), [events, setup]);
   const sum = useMemo(() => sheetSummary(events, setup), [events, setup]);
   const own = ownSideOf(setup);
@@ -894,7 +958,16 @@ function ScoreSheet({ setup, events, onClose }) {
                   <td style={bx({})}>{p ? inningsPitched(p.outs) : ""}</td>
                   <td style={bx({})}>{p ? n0(p.bf) : ""}</td>
                   <td style={bx({})}>{p ? n0(p.ab) : ""}</td>
-                  <td style={bx({})}>{p ? n0(p.pitches) : ""}</td>
+                  {(() => {
+                    /* 投球数は上限と並べて書く。上限は学年から決まる（FR-47） */
+                    const cap = row && side === own ? pitchLimit(grades[uniformOf(row[0])]) : null;
+                    const over = p && cap != null && p.pitches >= cap;
+                    return (
+                      <td style={bx(over ? { color: "#B00", fontWeight: 700 } : {})}>
+                        {p ? (cap != null ? `${p.pitches}/${cap}` : n0(p.pitches)) : ""}
+                      </td>
+                    );
+                  })()}
                   <td style={bx({})}>{p ? n0(p.h) : ""}</td>
                   <td style={bx({})}>{p ? n0(p.hr) : ""}</td>
                   <td style={bx({})}>{p ? n0(p.sacB) : ""}</td>
@@ -925,6 +998,9 @@ function ScoreSheet({ setup, events, onClose }) {
       <div className="sheet-wrap" style={{ overflowX: "auto", padding: 8 }}>
         {sides.map((s, i) => page(s, i))}
         <div className="no-print" style={{ fontSize: 11, color: C.sub, lineHeight: 1.7, width: PW, marginTop: 8 }}>
+          投球数の欄は「投じた球数／上限」。上限は全軟連 競技に関する連盟特別規則 8.投球制限 ① の
+          70球（4年生以下60球）で、学年を登録した自チームの投手にだけ出ます。
+          <br />
           成美堂スポーツ出版「野球スコアブック 保存版」（補充用紙 9107）の様式。A4横・1ページ1チーム。
           左の細い列が投球（●ボール ○見逃し ×空振り ―ファール）。数字の下線がゴロ、上線がフライ・ライナー。
           <br />
@@ -956,6 +1032,7 @@ export default function App() {
   const [rewindTo, setRewindTo] = useState(null);   // ログから選んだ巻き戻し先
   const [seq, setSeq] = useState(null);             // 守備の関与順を手で組むとき
   const [showSheetPaper, setShowSheetPaper] = useState(false);
+  const [grades, setGrades] = useState(() => loadRoster());
   const [seqFor, setSeqFor] = useState("batted");   // その関与順が打球のものか走者のものか
   const fileRef = useRef(null);
 
@@ -1338,15 +1415,22 @@ export default function App() {
   const pit = pitcherId(state);
   const pitchesNow = state.pitchCount[pit || `${state.isTop ? "home" : "away"}#投手未設定`] || 0;
   const pendCount = state.log.filter((l) => l.pending).length;
+  /* 投球数の上限。学年が分からなければ出さない（FR-47） */
+  const pitchCap = pit && sideOf(pit) === ownSideOf(setup) ? pitchLimit(grades[uniformOf(pit)]) : null;
+  const changeGrades = (g) => {
+    const clean = Object.fromEntries(Object.entries(g).filter(([, v]) => v != null));
+    setGrades(clean); saveRoster(clean);
+  };
 
   return (
     <Shell>
       {showSheet && (
         <Sheet state={state} events={events} setup={setup}
-          onClose={() => setShowSheet(false)} onCommit={commitBench} />
+          onClose={() => setShowSheet(false)} onCommit={commitBench}
+          grades={grades} onGrades={changeGrades} />
       )}
       {showSheetPaper && (
-        <ScoreSheet setup={setup} events={events} onClose={() => setShowSheetPaper(false)} />
+        <ScoreSheet setup={setup} events={events} grades={grades} onClose={() => setShowSheetPaper(false)} />
       )}
 
       {/* 計測ヘッダ */}
@@ -1397,7 +1481,9 @@ export default function App() {
           <div style={{ fontFamily: MONO, fontSize: 20 }}>B<b>{state.balls}</b> <span style={{ color: C.line }}>|</span> S<b>{state.strikes}</b></div>
           <div style={{ fontSize: 12, color: C.sub, textAlign: "right" }}>
             投手 {pit ? `#${uniformOf(pit)}` : <span style={{ color: C.red }}>未設定</span>}<br />
-            <span style={{ fontFamily: MONO, fontSize: 18, color: C.ink }}>{pitchesNow}</span>
+            <span style={{ fontFamily: MONO, fontSize: 18, color: pitchCap != null && pitchesNow >= pitchCap ? C.red : C.ink }}>
+              {pitchesNow}{pitchCap != null && <span style={{ fontSize: 13 }}>/{pitchCap}</span>}
+            </span>
             <span style={{ fontSize: 11 }}>球</span>
           </div>
         </div>
