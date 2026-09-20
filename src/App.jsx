@@ -207,6 +207,10 @@ function Setup({ initial, onStart, locked }) {
   };
 
   const start = () => {
+    /* 止めるのは、記録そのものが壊れるものだけにする。
+       投手が未設定でも盤面は成立するので、警告にして先へ通す（§12.6 記録を止めない）。
+       試合が始まってしまえば「選手交代」からいつでも設定できる */
+    const noPitcher = [];
     for (const side of locked ? [] : SIDES) {
       const entries = s.lineup[side].map((sl) => sl.entries[0]);
       if (entries.some((e) => !uniformOf(e.playerId))) {
@@ -216,16 +220,15 @@ function Setup({ initial, onStart, locked }) {
       const nums = entries.map((e) => uniformOf(e.playerId));
       const dup = nums.find((n, i) => nums.indexOf(n) !== i);
       if (dup) { setErr(`${s.teamName[side]} に背番号 ${dup} が重複しています`); return; }
-      if (!entries.some((e) => e.position === 1)) {
-        setErr(`${s.teamName[side]} の投手が未設定です（投球数の集計に使います）`);
-        return;
-      }
       const pos = entries.map((e) => e.position).filter((p) => p != null);
       const dupPos = pos.find((p, i) => pos.indexOf(p) !== i);
       if (dupPos) { setErr(`${s.teamName[side]} で ${POS[dupPos]} が重複しています`); return; }
+      if (!entries.some((e) => e.position === 1)) noPitcher.push(s.teamName[side]);
     }
     setErr("");
-    onStart(s);
+    onStart(s, noPitcher.length
+      ? `${noPitcher.join("・")} の投手が未設定のまま始めました。投球数を数えるため、「選手交代」から守備位置に投手を設定してください。`
+      : "");
   };
 
   return (
@@ -1065,7 +1068,7 @@ export default function App() {
     return (
       <Shell>
         <Setup initial={setup} locked={events.length > 0}
-          onStart={(s) => { setSetup(s); setShowSetup(false); setNotice(""); }} />
+          onStart={(s, warn) => { setSetup(s); setShowSetup(false); setNotice(warn || ""); }} />
         <div style={{ padding: "0 16px 16px" }}>
           <SmallBtn onClick={() => fileRef.current && fileRef.current.click()}>JSONを読み込む</SmallBtn>
           <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: "none" }}
