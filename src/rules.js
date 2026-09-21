@@ -124,6 +124,11 @@ export const THROW_ADVANCE = new Set(["打球で進塁", "けん制の悪送球"
    「投球したものは数える」の原則から数えている */
 export const ON_PITCH_REASONS = new Set(["盗塁", "盗塁失敗", "暴投", "捕逸", "ボーク"]);
 
+/* 投球に乗って進んだ走者のプレー。紙は記号のあとに「その打席の何球目か」を書く
+   （`S2(2)` = 2番バッターの2球目に盗塁、`PS3(8)`、`WP4(6)`）。
+   投球も走者も同じイベント列に並んでいるので、順番から数えれば出る。追加入力は要らない */
+const PITCH_NTH = new Set(["盗塁", "暴投", "捕逸"]);
+
 /* 学童部の投球数制限。競技に関する連盟特別規則《学童部（女子共）》
    「7 学童部の投球数制限について」①（2026年シーズン時点）。
    1試合かつ1日の投球数は70球以内、4年生以下は60球以内。
@@ -1086,6 +1091,7 @@ export function scoreSheet(events, setup) {
     return cells.get(k);
   };
   let maxInning = 1;
+  let nth = 0;                      // その打席で何球目か（記法規約の `S2(2)` の 2）
 
   list.forEach((e, i) => {
     const before = s;
@@ -1095,6 +1101,7 @@ export function scoreSheet(events, setup) {
     const bid = batterId(before);
 
     if (e.t === "pitch") {
+      nth += 1;
       const c = cellFor(before, side, order);
       c.num = uniformOf(bid);
       c.pitches.push(PITCH_MARK[e.r] || e.r);
@@ -1104,21 +1111,30 @@ export function scoreSheet(events, setup) {
       c.result = resultMark(e);
       c.kind = battedKind(e.result, e.batted);
       if (e.note) c.result += `[${e.note}]`;
-    } else if (e.t === "runner" && e.from !== "all") {
-      const rid = before.bases[e.from];
-      if (rid) {
-        /* 走者の記録は、その走者が出塁したマスへ入れる（記法規約 §1） */
+    } else if (e.t === "runner") {
+      /* 走者の記録は、その走者が出塁したマスへ入れる（記法規約 §1）。
+         紙はダイヤの辺に沿って書き分けるため、どの塁へ進んだかも持つ */
+      const moved = applyEvent(before, e);
+      for (const f of (e.from === "all" ? [0, 1, 2] : [e.from])) {
+        const rid = before.bases[f];
+        if (!rid) continue;
         let target = null;
         for (const [, c] of [...cells].reverse()) if (c.num === uniformOf(rid) && c.side === side) { target = c; break; }
         /* 打球で進んだ場合、紙は理由を書かず守備の記号だけを残す（`9E (2)`）。
            走者の記録には「何番バッターの時か」を必ず添える（記法規約 §7） */
         const via = fieldersNotation(fieldersOf(e));
         const mark = via && e.reason === "打球で進塁" ? "" : (RUNNER_MARK[e.reason] || e.reason);
-        (target || cellFor(before, side, order)).runner.push(`${via}${mark}(${order})`);
+        const at = PITCH_NTH.has(e.reason) && nth > 0 ? String(nth) : "";
+        const seat = moved.bases.indexOf(rid);
+        /* 0,1,2 = 塁 / 3 = 生還 / -1 = アウト */
+        const to = seat >= 0 ? seat : (moved.score[side] > before.score[side] ? 3 : -1);
+        (target || cellFor(before, side, order)).runner.push({ text: `${via}${mark}${at}(${order})`, to });
       }
     }
 
     const after = applyEvent(before, e);
+    /* 打者が代わったら球数を数え直す。イニングが変わったときも同じ */
+    if (batterId(after) !== bid || after.isTop !== before.isTop || after.inning !== before.inning) nth = 0;
 
     /* 投球で決着した打席（四球・三振）もマスに入れる */
     if (e.t === "pitch" && after.log.length > before.log.length) {

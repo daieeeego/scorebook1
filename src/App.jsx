@@ -728,6 +728,13 @@ const HDR1 = 44, HDR2 = 26;   // 見出し2段。縦書き3文字が入る高さ
 const n0 = (v) => (v ? String(v) : "");
 /* 得点は「何番バッターの時か」を丸数字で書く（記法規約 §7 の ④） */
 const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"];
+/* 走者の記録を置く場所。進んだ塁に対応するダイヤの辺のそばへ置く */
+const RUNNER_SPOTS = [
+  { k: "b2", has: (to) => to === 1 || to === -1, at: { right: 0, top: 0 }, align: "right" },      // 二塁へ／アウト
+  { k: "b3", has: (to) => to === 2, at: { left: 10, top: 0 }, align: "left" },                    // 三塁へ
+  { k: "hm", has: (to) => to === 3, at: { left: 10, bottom: 11 }, align: "left" },                // 生還
+  { k: "b1", has: (to) => to === 0, at: { right: 1, bottom: 11 }, align: "right" },               // 一塁へ
+];
 const STEAL = RUNNER_REASONS.find((r) => r.k === "盗塁");
 
 /** 1マス。投球・ダイヤ・打者結果・走者・アウトカウント・得点（記法規約 §1） */
@@ -743,11 +750,17 @@ function PaperCell({ c }) {
         <svg viewBox="0 0 44 44" style={{ position: "absolute", left: 9, top: 0, width: IW - 10, height: SLOT - 4 }}>
           <path d="M22 9 L35 22 L22 35 L9 22 Z" fill="none" stroke={SKT} strokeWidth="0.8" strokeDasharray="2 2" />
         </svg>
-        {c && c.runner.length > 0 && (
-          <div style={{ position: "absolute", right: 0, top: 0, fontSize: 5.5, lineHeight: "6px", textAlign: "right" }}>
-            {c.runner.map((r, i) => <div key={i}>{r}</div>)}
-          </div>
-        )}
+        {c && c.runner.length > 0 && RUNNER_SPOTS.map((spot) => {
+          /* 紙はダイヤの辺に沿って書く。二塁へは右上、三塁へは左上、生還は左下
+             （記法規約 §1「ダイヤモンド図の辺＝走塁の経路」） */
+          const items = c.runner.filter((r) => spot.has(r.to));
+          if (!items.length) return null;
+          return (
+            <div key={spot.k} style={{ position: "absolute", ...spot.at, fontSize: 5.5, lineHeight: "6px", textAlign: spot.align, whiteSpace: "nowrap" }}>
+              {items.map((r, i) => <div key={i}>{r.text}</div>)}
+            </div>
+          );
+        })}
         {c && c.outs && (
           <div style={{ position: "absolute", left: 9, top: SLOT / 2 - 12, width: IW - 10, textAlign: "center", fontSize: 7, fontWeight: 700 }}>
             {c.outs}
@@ -759,7 +772,8 @@ function PaperCell({ c }) {
           </div>
         )}
         {c && c.scored && (
-          <div style={{ position: "absolute", left: 9, bottom: 0, width: IW - 10, textAlign: "center", fontSize: 9, fontWeight: 700 }}>
+          /* 得点はダイヤの中央。アウトカウントと同じ場所（記法規約 §1） */
+          <div style={{ position: "absolute", left: 9, top: SLOT / 2 - 12, width: IW - 10, textAlign: "center", fontSize: 9, fontWeight: 700 }}>
             {c.scoredBy ? CIRCLED[c.scoredBy - 1] : "●"}
           </div>
         )}
