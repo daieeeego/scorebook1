@@ -7,7 +7,7 @@ import {
   swapSides, ownSideOf, oppSideOf, HHMM, scoreSheet,
   deriveState, questionFor, runnerQuestionFor, stateBefore, statsFrom, migrate, toSlots,
   sheetSummary, inningsPitched, sideOf,
-  defaultMoves, moveOptions, validateMoves, defaultFielders, fieldersNotation,
+  defaultMoves, moveOptions, validateMoves, defaultFielders, fieldersNotation, fieldersOf,
   batKey, batterNum, batterOrder, activeEntry, activeEntries,
   pitcherId, uniformOf, validateSub, inferSubKind, pid,
 } from "./rules.js";
@@ -1207,15 +1207,38 @@ export default function App() {
      初期値は導出結果なので、足りないところだけ触ればよい */
   const openSeq = () => {
     tap();
-    setSeq(seq || {
-      ...(draft.zone2 != null
-        ? { f: [], errorAt: null, kind: "" }
-        : defaultFielders(draft.zone, draft.result, draft.moves)),
-      base: draft.touch || "",
-    });
+    /* すでに手で組んだものがあればそれを、無ければ導出したものを初期値にする */
+    setSeq(seq || { base: draft.touch || "", ...fieldersOf(draft) });
     setSeqFor("batted");
     setMode("fielders");
   };
+
+  /* 走者がいない場面は行き先の確認画面を通らないため、「直す」に触れないまま
+     記録が終わる。内野安打の `6-3` のように送球を書き足したいことがあるので、
+     直前の打球に限って、記録したあとからでも関与順を書き直せるようにする（FR-50） */
+  const lastPlay = events.length ? events[events.length - 1] : null;
+  const canFixSeq = !!(lastPlay && lastPlay.t === "inplay" && lastPlay.zone != null && lastPlay.result !== "保留");
+
+  const fixLastSeq = () => {
+    tap();
+    const last = events[events.length - 1];
+    setEvents((e) => e.slice(0, -1));
+    setPlays((p) => Math.max(0, p - 1));
+    setTapsThis(0);
+    setQuestion(null);
+    setDraft({ event: last });
+    setSeq(fieldersOf(last));
+    setSeqFor("redo");
+    setMode("fielders");
+  };
+
+  /* 書き直しをやめる。消したイベントをそのまま戻す */
+  const cancelFixSeq = () => {
+    const ev = draft.event;
+    setSeq(null); setSeqFor("batted");
+    commit(ev);
+  };
+
   const seqAdd = (n) => { tap(); setSeq((q) => ({ ...q, f: [...q.f, n] })); };
   const seqDrop = () => { tap(); setSeq((q) => ({ ...q, f: q.f.slice(0, -1), errorAt: q.errorAt != null && q.errorAt >= q.f.length - 1 ? null : q.errorAt })); };
   const seqError = (i) => { tap(); setSeq((q) => ({ ...q, errorAt: q.errorAt === i ? null : i, kind: q.errorAt === i ? "" : q.kind })); };
@@ -1223,6 +1246,16 @@ export default function App() {
   const seqBase = (k) => { tap(); setSeq((q) => ({ ...q, base: q.base === k ? "" : k })); };
   const seqDone = () => {
     tap();
+    /* 記録済みの打球を書き直した場合は、行き先はそのままに関与順だけ差し替える */
+    if (seqFor === "redo") {
+      const { fielders, errorAt, errorKind, touch, ...rest } = draft.event;
+      commit({
+        ...rest,
+        ...(seq.f.length ? { fielders: seq.f, errorAt: seq.errorAt, errorKind: seq.kind } : {}),
+        ...(seq.base ? { touch: seq.base } : {}),
+      });
+      return;
+    }
     if (seqFor === "runner") {
       commitRunner(draft, {
         t: "runner", from: draft.from, reason: draft.reason.k, out: !!draft.reason.out,
@@ -1274,6 +1307,7 @@ export default function App() {
       case "batted": return "結果の選択に戻る";
       case "moves": return draft && asksBatted(draft.result) ? "打球の性質の選択に戻る" : "結果の選択に戻る";
       case "fielders":
+        if (seqFor === "redo") return "書き直しをやめる";
         if (seqFor !== "runner") return "ランナーの行き先に戻る";
         return draft && draft.to != null ? "進塁先の選択に戻る" : "理由の選択に戻る";
       case "question": return "結果の選択に戻る";
@@ -1313,6 +1347,7 @@ export default function App() {
       else if (mode === "detail") setMode("result");
       else if (mode === "batted") { setDraft({ zone: draft.zone, zone2: draft.zone2 }); setMode("result"); }
       else if (mode === "fielders") {
+        if (seqFor === "redo") { cancelFixSeq(); return; }
         const to = seqFor !== "runner" ? "moves" : draft.to != null ? "runner-far" : "runner-why";
         setSeq(null); setSeqFor("batted"); setMode(to);
       }
@@ -1355,7 +1390,12 @@ export default function App() {
       } else {
         setQuestion(null);
         if (last.moves) {
-          setDraft({ zone: last.zone, zone2: last.zone2, result: last.result, moves: last.moves, batted: last.batted });
+          /* 手で組んだ関与順も戻す。落とすと「直す」の表示が導出に戻ってしまう */
+          setDraft({
+            zone: last.zone, zone2: last.zone2, result: last.result, moves: last.moves, batted: last.batted,
+            ...(last.fielders ? { fielders: last.fielders, errorAt: last.errorAt, errorKind: last.errorKind } : {}),
+            ...(last.touch ? { touch: last.touch } : {}),
+          });
           setMovesErr(""); setMode("moves");
         } else if (NO_BALL_KEYS.has(last.result)) { setDraft(null); setMode("no-ball"); }
         else { setDraft({ zone: last.zone, zone2: last.zone2 }); setMode(DETAIL_KEYS.has(last.result) ? "detail" : "result"); }
@@ -1549,6 +1589,24 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            {/* 直前の打球の関与順。走者がいない打席は確認画面を通らないため、
+                ここが「直す」の入口になる（FR-50） */}
+            {canFixSeq && (
+              <div style={{ marginTop: 16, background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 10px" }}>
+                <div style={{ fontSize: 11, letterSpacing: 2, color: C.dim, marginBottom: 4 }}>直前の打球</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <b style={{ fontFamily: MONO, fontSize: 18 }}>{fieldersNotation(fieldersOf(lastPlay)) || "—"}</b>
+                  <span style={{ fontSize: 12, color: C.sub }}>
+                    {zoneName(lastPlay.zone, lastPlay.zone2)}への{lastPlay.result}
+                  </span>
+                  <div style={{ marginLeft: "auto" }}><SmallBtn onClick={fixLastSeq}>送球の順を直す</SmallBtn></div>
+                </div>
+                <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+                  内野安打の <span style={{ fontFamily: MONO }}>6-3</span> のように、送球を書き足せます
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -1718,7 +1776,9 @@ export default function App() {
             <div style={{ fontSize: 14, color: C.sub, marginBottom: 6 }}>
               {seqFor === "runner"
                 ? `${draft.from === "all" ? "ランナー" : `${BASE[draft.from]}ランナー`} ─ ${draft.reason.l}。送球の順`
-                : "送球の順"}
+                : seqFor === "redo"
+                  ? `${zoneName(draft.event.zone, draft.event.zone2)}への${draft.event.result} ─ 送球の順を書き直す`
+                  : "送球の順"}
             </div>
             <div style={{ background: C.card, border: `2px solid ${C.ink}`, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
               <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, letterSpacing: 1 }}>
