@@ -1111,10 +1111,13 @@ export function scoreSheet(events, setup) {
       c.result = resultMark(e);
       c.kind = battedKind(e.result, e.batted);
       if (e.note) c.result += `[${e.note}]`;
-    } else if (e.t === "runner" && e.from !== "all") {
-      const rid = before.bases[e.from];
-      if (rid) {
-        /* 走者の記録は、その走者が出塁したマスへ入れる（記法規約 §1） */
+    } else if (e.t === "runner") {
+      /* 走者の記録は、その走者が出塁したマスへ入れる（記法規約 §1）。
+         紙はダイヤの辺に沿って書き分けるため、どの塁へ進んだかも持つ */
+      const moved = applyEvent(before, e);
+      for (const f of (e.from === "all" ? [0, 1, 2] : [e.from])) {
+        const rid = before.bases[f];
+        if (!rid) continue;
         let target = null;
         for (const [, c] of [...cells].reverse()) if (c.num === uniformOf(rid) && c.side === side) { target = c; break; }
         /* 打球で進んだ場合、紙は理由を書かず守備の記号だけを残す（`9E (2)`）。
@@ -1122,7 +1125,10 @@ export function scoreSheet(events, setup) {
         const via = fieldersNotation(fieldersOf(e));
         const mark = via && e.reason === "打球で進塁" ? "" : (RUNNER_MARK[e.reason] || e.reason);
         const at = PITCH_NTH.has(e.reason) && nth > 0 ? String(nth) : "";
-        (target || cellFor(before, side, order)).runner.push(`${via}${mark}${at}(${order})`);
+        const seat = moved.bases.indexOf(rid);
+        /* 0,1,2 = 塁 / 3 = 生還 / -1 = アウト */
+        const to = seat >= 0 ? seat : (moved.score[side] > before.score[side] ? 3 : -1);
+        (target || cellFor(before, side, order)).runner.push({ text: `${via}${mark}${at}(${order})`, to });
       }
     }
 
