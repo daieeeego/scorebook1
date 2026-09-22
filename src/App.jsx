@@ -15,6 +15,9 @@ import {
 const C = {
   paper: "#E9ECF0", card: "#FFFFFF", ink: "#15273D", sub: "#5E6D80",
   line: "#C6CED8", red: "#BE3A2B", dim: "#98A4B2", field: "#DFE5DC",
+  /* ボール＝緑、ストライク＝黄（球場の表示板と同じ並び）。
+     白地の上で読めるよう、黄は明度を落としてある */
+  green: "#1B7F45", yellow: "#B8860B",
 };
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
 const SAVE_KEY = "scorebook.v1";
@@ -1539,7 +1542,11 @@ export default function App() {
             <b>{batterOrder(state)}番</b>
             <span style={{ fontFamily: MONO, marginLeft: 6 }}>#{batterNum(state)}</span>
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 20 }}>B<b>{state.balls}</b> <span style={{ color: C.line }}>|</span> S<b>{state.strikes}</b></div>
+          <div style={{ fontFamily: MONO, fontSize: 20 }}>
+            <span style={{ color: C.green, fontWeight: 700 }}>B<b>{state.balls}</b></span>
+            <span style={{ color: C.line, margin: "0 6px" }}>|</span>
+            <span style={{ color: C.yellow, fontWeight: 700 }}>S<b>{state.strikes}</b></span>
+          </div>
           <div style={{ fontSize: 12, color: C.sub, textAlign: "right" }}>
             投手 {pit ? `#${uniformOf(pit)}` : <span style={{ color: C.red }}>未設定</span>}<br />
             <span style={{ fontFamily: MONO, fontSize: 18, color: pitchCap != null && pitchesNow >= pitchCap ? C.red : C.ink }}>
