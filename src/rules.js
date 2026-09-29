@@ -1081,12 +1081,19 @@ function resultMark(e) {
 export function scoreSheet(events, setup) {
   const list = resolvedEvents(events);
   let s = initialState(setup);
-  const cells = new Map();                                  // "side|order|inning" -> マス
-  const key = (side, order, inning) => `${side}|${order}|${inning}`;
+  const cells = new Map();                                  // "side|order|inning|lap" -> マス
+  const key = (side, order, inning, lap) => `${side}|${order}|${inning}|${lap}`;
+  /* 打者一巡。その回の先頭打者に打順が戻ったら、紙は隣の列へ移って同じ回を書き続ける。
+     同じマスに2打席目を書くと1打席目の結果が消えるため、列（lap）を分ける */
+  let lap = 0;
+  let lead = batterOrder(s);        // その回の先頭打者の打順
+  const laps = new Map();           // "side|inning" -> その回が使った列の数
   const cellFor = (st, side, order) => {
-    const k = key(side, order, st.inning);
+    const k = key(side, order, st.inning, lap);
     if (!cells.has(k)) {
-      cells.set(k, { side, order, inning: st.inning, num: "", pitches: [], result: "", kind: "", runner: [], outs: "", scored: false, scoredBy: null });
+      cells.set(k, { side, order, inning: st.inning, lap, num: "", pitches: [], result: "", kind: "", runner: [], outs: "", scored: false, scoredBy: null });
+      const lk = `${side}|${st.inning}`;
+      laps.set(lk, Math.max(laps.get(lk) || 1, lap + 1));
     }
     return cells.get(k);
   };
@@ -1185,10 +1192,17 @@ export function scoreSheet(events, setup) {
         }
       }
     }
+    /* 回が替われば列を戻す。同じ回で先頭打者の打順に戻れば、次の列へ移る */
+    if (after.isTop !== before.isTop || after.inning !== before.inning) {
+      lap = 0;
+      lead = batterOrder(after);
+    } else if (batterOrder(after) !== order && batterOrder(after) === lead) {
+      lap += 1;
+    }
     s = after;
   });
 
-  return { cells, maxInning: Math.max(maxInning, s.inning), state: s };
+  return { cells, laps, maxInning: Math.max(maxInning, s.inning), state: s };
 }
 
 /* ---------------- 保存データの移行 ---------------- */
