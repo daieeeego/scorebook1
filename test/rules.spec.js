@@ -10,6 +10,7 @@ import {
   pendingPlays,
   pid,
   questionFor,
+  scoreSheet,
   stateBefore,
   statsFrom,
   toSlots,
@@ -413,5 +414,23 @@ describe("FR-10: 保存データの移行", () => {
 
   it("保存データでない値は読み込まない", () => {
     expect(migrate(null)).toBeNull();
+  });
+});
+
+describe("記法規約 §1: 打者一巡したマス", () => {
+  it("同じ回に2打席目が回ってきたら、1打席目のマスを上書きせず次の列に書く", () => {
+    const events = repeat(10, ball4).flat();                   // 1回表に10人連続四球
+    const { cells, laps } = scoreSheet(events, setup());
+    expect(cells.get("away|1|1|0").result).toBe("H");
+    expect(cells.get("away|1|1|1").result).toBe("H");
+    expect(cells.get("away|1|1|0").pitches).toHaveLength(4);
+    expect(laps.get("away|1")).toBe(2);
+  });
+
+  it("一巡しなかった回は1列のままで、次の回は最初の列から始まる", () => {
+    const events = [...repeat(10, ball4).flat(), ...threeStrikeouts(), ...threeStrikeouts(), ...threeStrikeouts()];
+    const { cells, laps } = scoreSheet(events, setup());
+    expect(laps.get("home|1")).toBe(1);
+    expect(cells.get("away|5|2|0").result).toBe("K");
   });
 });

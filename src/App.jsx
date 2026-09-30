@@ -741,7 +741,7 @@ const RUNNER_SPOTS = [
 const STEAL = RUNNER_REASONS.find((r) => r.k === "盗塁");
 
 /** 1マス。投球・ダイヤ・打者結果・走者・アウトカウント・得点（記法規約 §1） */
-function PaperCell({ c }) {
+function PaperCell({ c, w = IW }) {
   const line = c && c.kind === "ground" ? { borderBottom: "1px solid #123" }
     : c && (c.kind === "fly" || c.kind === "liner") ? { borderTop: "1px solid #123" } : {};
   return (
@@ -750,7 +750,7 @@ function PaperCell({ c }) {
         <div style={{ position: "absolute", left: 0, top: 0, width: 9, fontSize: 5.5, lineHeight: "6px" }}>
           {(c ? c.pitches : []).map((p, i) => <div key={i}>{p}</div>)}
         </div>
-        <svg viewBox="0 0 44 44" style={{ position: "absolute", left: 9, top: 0, width: IW - 10, height: SLOT - 4 }}>
+        <svg viewBox="0 0 44 44" style={{ position: "absolute", left: 9, top: 0, width: w - 10, height: SLOT - 4 }}>
           <path d="M22 9 L35 22 L22 35 L9 22 Z" fill="none" stroke={SKT} strokeWidth="0.8" strokeDasharray="2 2" />
         </svg>
         {c && c.runner.length > 0 && RUNNER_SPOTS.map((spot) => {
@@ -765,7 +765,7 @@ function PaperCell({ c }) {
           );
         })}
         {c && c.outs && (
-          <div style={{ position: "absolute", left: 9, top: SLOT / 2 - 12, width: IW - 10, textAlign: "center", fontSize: 7, fontWeight: 700 }}>
+          <div style={{ position: "absolute", left: 9, top: SLOT / 2 - 12, width: w - 10, textAlign: "center", fontSize: 7, fontWeight: 700 }}>
             {c.outs}
           </div>
         )}
@@ -776,7 +776,7 @@ function PaperCell({ c }) {
         )}
         {c && c.scored && (
           /* 得点はダイヤの中央。アウトカウントと同じ場所（記法規約 §1） */
-          <div style={{ position: "absolute", left: 9, top: SLOT / 2 - 12, width: IW - 10, textAlign: "center", fontSize: 9, fontWeight: 700 }}>
+          <div style={{ position: "absolute", left: 9, top: SLOT / 2 - 12, width: w - 10, textAlign: "center", fontSize: 9, fontWeight: 700 }}>
             {c.scoredBy ? CIRCLED[c.scoredBy - 1] : "●"}
           </div>
         )}
@@ -786,7 +786,7 @@ function PaperCell({ c }) {
 }
 
 function ScoreSheet({ setup, events, grades = {}, onClose }) {
-  const { cells } = useMemo(() => scoreSheet(events, setup), [events, setup]);
+  const { cells, laps } = useMemo(() => scoreSheet(events, setup), [events, setup]);
   const sum = useMemo(() => sheetSummary(events, setup), [events, setup]);
   const own = ownSideOf(setup);
   const sides = [own, oppSideOf(setup)];
@@ -820,6 +820,16 @@ function ScoreSheet({ setup, events, grades = {}, onClose }) {
 
   const page = (side, idx) => {
     const slots = setup.lineup[side];
+    /* イニングの列。打者一巡した回は、紙と同じく隣に同じ回の列を足して続きを書く。
+       足した分だけ後ろの回が右へずれるので、まだ行っていない回の列を落として13列に収める */
+    const cols = [];
+    for (const i of INNS) {
+      const n = laps.get(`${side}|${i}`) || 1;
+      for (let l = 0; l < n; l++) cols.push({ i, l });
+    }
+    while (cols.length > INNS.length && cols[cols.length - 1].i > st.inning) cols.pop();
+    const iw = cols.length > INNS.length ? Math.floor((PW - LEFT - RIGHT) / cols.length) : IW;
+    const ck = (c) => `${c.i}-${c.l}`;
     const tot = { pa: 0, ab: 0, run: 0, h1: 0, h2: 0, h3: 0, hr: 0, tb: 0, rbi: 0, sb: 0, cs: 0, sacB: 0, sacF: 0, bb: 0, so: 0, lob: 0 };
     const rows = slots.map((slot, si) => {
       const order = si + 1;
@@ -851,7 +861,7 @@ function ScoreSheet({ setup, events, grades = {}, onClose }) {
           <td style={bx({})} />
           <td style={bx({})} />
           <td style={bx({ fontSize: 8 })}>{stack((e) => uniformOf(e.playerId))}</td>
-          {INNS.map((i) => <PaperCell key={i} c={cells.get(`${side}|${order}|${i}`)} />)}
+          {cols.map((c) => <PaperCell key={ck(c)} w={iw} c={cells.get(`${side}|${order}|${c.i}|${c.l}`)} />)}
           <td style={bx({})}>{n0(agg.pa)}</td>
           <td style={bx({})}>{n0(agg.ab)}</td>
           <td style={bx({})}>{n0(agg.run)}</td>
@@ -890,7 +900,11 @@ function ScoreSheet({ setup, events, grades = {}, onClose }) {
               <td style={bx({ width: cw.ord })} rowSpan={2}><span style={vert}>打順</span></td>
               <td style={bx({ fontSize: 8, height: HDR1 })} colSpan={3}>シート</td>
               <td style={bx({ fontSize: 8 })} colSpan={3}>{side === "away" ? "先攻" : "後攻"}</td>
-              {INNS.map((i) => <td key={i} style={bx({ width: IW, fontSize: 11, fontWeight: 700 })} rowSpan={2}>{i}</td>)}
+              {cols.map((c) => (
+                <td key={ck(c)} style={bx({ width: iw, fontSize: 11, fontWeight: 700 })} rowSpan={2}>
+                  {c.i}{c.l > 0 && <div style={{ fontSize: 7, fontWeight: 400 }}>{c.l + 1}巡目</div>}
+                </td>
+              ))}
               <td style={bx({ width: rw.pa })} rowSpan={2}><span style={vert}>打席数</span></td>
               <td style={bx({ width: rw.ab })} rowSpan={2}><span style={vert}>打数</span></td>
               <td style={bx({ width: rw.run })} rowSpan={2}><span style={vert}>得点</span></td>
@@ -916,9 +930,9 @@ function ScoreSheet({ setup, events, grades = {}, onClose }) {
             <tr>
               <td style={bx({ fontSize: 9 })} colSpan={5} rowSpan={3}>合 計</td>
               <td style={bx({ fontSize: 6.5 })} colSpan={6}>安打／四死球／失策</td>
-              {INNS.map((i) => {
-                const r = sum.inn[side].get(i);
-                return <td key={i} style={bx({ fontSize: 7 })}>{r ? `${r.h}／${r.bb}／${r.err}` : ""}</td>;
+              {cols.map(({ i, l }) => {
+                const r = l === 0 ? sum.inn[side].get(i) : null;
+                return <td key={`${i}-${l}`} style={bx({ fontSize: 7 })}>{r ? `${r.h}／${r.bb}／${r.err}` : ""}</td>;
               })}
               <td style={bx({})}>{n0(tot.pa)}</td>
               <td style={bx({})}>{n0(tot.ab)}</td>
@@ -939,17 +953,17 @@ function ScoreSheet({ setup, events, grades = {}, onClose }) {
             </tr>
             <tr>
               <td style={bx({ fontSize: 9 })} colSpan={6}>得　点</td>
-              {INNS.map((i) => {
-                const r = sum.inn[side].get(i);
-                return <td key={i} style={bx({})}>{r && i <= st.inning ? r.run : ""}</td>;
+              {cols.map(({ i, l }) => {
+                const r = l === 0 ? sum.inn[side].get(i) : null;
+                return <td key={`${i}-${l}`} style={bx({})}>{r && i <= st.inning ? r.run : ""}</td>;
               })}
               <td style={bx({})} colSpan={16} />
             </tr>
             <tr>
               <td style={bx({ fontSize: 9 })} colSpan={6}>投 球 数</td>
-              {INNS.map((i) => {
-                const r = sum.inn[side].get(i);
-                return <td key={i} style={bx({})}>{r && r.pitches ? r.pitches : ""}</td>;
+              {cols.map(({ i, l }) => {
+                const r = l === 0 ? sum.inn[side].get(i) : null;
+                return <td key={`${i}-${l}`} style={bx({})}>{r && r.pitches ? r.pitches : ""}</td>;
               })}
               <td style={bx({})} colSpan={16} />
             </tr>
